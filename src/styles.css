@@ -22,9 +22,11 @@ button {
   cursor: pointer;
 }
 
-button:disabled {
+button:disabled,
+input:disabled,
+select:disabled {
   cursor: not-allowed;
-  opacity: 0.22;
+  opacity: 0.55;
 }
 
 .app {
@@ -75,7 +77,8 @@ button:disabled {
 }
 
 .ghost,
-.mini {
+.mini,
+.primary {
   border: 1px solid rgba(255, 255, 255, 0.17);
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
@@ -83,6 +86,13 @@ button:disabled {
   padding: 12px 15px;
   font-weight: 900;
   white-space: nowrap;
+}
+
+.primary {
+  background: linear-gradient(135deg, #ffd36a, #ff9f1c);
+  color: #1a1200;
+  border: 0;
+  margin-top: 12px;
 }
 
 .mini {
@@ -107,15 +117,17 @@ button:disabled {
 
 .quick-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1.15fr 0.85fr;
   gap: 18px;
 }
 
 .board-controls,
-.score-grid {
+.score-grid,
+.turn-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+  margin-top: 12px;
 }
 
 .score-grid {
@@ -143,6 +155,39 @@ button:disabled {
   padding: 13px 14px;
   background: rgba(1, 4, 14, 0.58);
   color: #fff;
+}
+
+.rule-box,
+.notice {
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 211, 106, 0.1);
+  border: 1px solid rgba(255, 211, 106, 0.24);
+  color: #ffe7aa;
+  line-height: 1.45;
+}
+
+.notice {
+  margin-bottom: 14px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(1, 4, 14, 0.32);
+  color: #f6f7fb;
+  font-weight: 850;
+}
+
+.check-row input {
+  width: 20px;
+  height: 20px;
 }
 
 .played {
@@ -183,6 +228,8 @@ button:disabled {
   color: #ffd36a;
   font-weight: 950;
   background: rgba(255, 211, 106, 0.08);
+  text-align: center;
+  padding: 8px;
 }
 
 .section-head {
@@ -469,6 +516,7 @@ button:disabled {
 @media (max-width: 620px) {
   .board-controls,
   .score-grid,
+  .turn-grid,
   .board-preview {
     grid-template-columns: 1fr;
   }
