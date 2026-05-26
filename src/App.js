@@ -222,6 +222,185 @@ function getMyHandStrength(myHand, leftEnd, rightEnd) {
   };
 }
 
+
+function getGamePhase(board) {
+  const playedCount = board.length;
+  if (playedCount <= 8) return "early";
+  if (playedCount <= 18) return "middle";
+  return "late";
+}
+
+function getTilesRemaining(board) {
+  return Math.max(0, 28 - board.length);
+}
+
+function getPlayableCount(hand, leftEnd, rightEnd) {
+  if (leftEnd === null || rightEnd === null) return hand.length;
+  return hand.filter((tile) => getLegalSides(tile, leftEnd, rightEnd).some((side) => side !== "center")).length;
+}
+
+function getFlexibilityScore(hand, leftEnd, rightEnd) {
+  if (!hand.length) return 100;
+
+  const numbersCovered = new Set();
+  hand.forEach((tile) => {
+    const [a, b] = parseTile(tile);
+    numbersCovered.add(a);
+    numbersCovered.add(b);
+  });
+
+  const playableCount = getPlayableCount(hand, leftEnd, rightEnd);
+  const coverageScore = numbersCovered.size * 8;
+  const playableScore = playableCount * 14;
+  const handSizePenalty = Math.max(0, hand.length - 3) * 2;
+
+  return Math.max(0, Math.min(100, Math.round(coverageScore + playableScore - handSizePenalty)));
+}
+
+function getDoubleEscapeChance({ doubleTile, hand, leftEnd, rightEnd, board, passLog, playedTiles }) {
+  if (!isDouble(doubleTile)) return 100;
+
+  const [number] = parseTile(doubleTile);
+  const unknownTiles = getRemainingUnknownTiles(hand, playedTiles);
+  const unknownCount = countNumberInTiles(unknownTiles, number);
+  const myCount = countNumberInTiles(hand, number);
+  const phase = getGamePhase(board);
+
+  let chance = 20;
+
+  if (leftEnd === number || rightEnd === number) chance += 35;
+  chance += myCount * 10;
+
+  if (unknownCount <= 2) chance += 15;
+  if (unknownCount >= 5) chance -= 12;
+
+  if (getPlayerPassNumbers(passLog, "rightOpponent").includes(number)) chance += 8;
+  if (getPlayerPassNumbers(passLog, "leftOpponent").includes(number)) chance += 8;
+  if (getPlayerPassNumbers(passLog, "partner").includes(number)) chance -= 10;
+
+  if (phase === "late") chance += 18;
+  if (phase === "early") chance -= 10;
+
+  return Math.max(0, Math.min(100, Math.round(chance)));
+}
+
+function getDoubleRiskReport({ remainingHand, leftEnd, rightEnd, board, passLog, playedTiles }) {
+  const phase = getGamePhase(board);
+  const tilesRemaining = getTilesRemaining(board);
+  const doubles = remainingHand.filter(isDouble);
+
+  let penalty = 0;
+  const warnings = [];
+  const reasons = [];
+
+  doubles.forEach((doubleTile) => {
+    const [number] = parseTile(doubleTile);
+    const supportCount = countNumberInTiles(remainingHand, number);
+    const escapeChance = getDoubleEscapeChance({
+      doubleTile,
+      hand: remainingHand,
+      leftEnd,
+      rightEnd,
+      board,
+      passLog,
+      playedTiles,
+    });
+
+    const isNaked = supportCount <= 2; // double itself counts as 2 pips of that number
+    const isPlayableNow = leftEnd === number || rightEnd === number;
+
+    if (isNaked && !isPlayableNow) {
+      let thisPenalty = 14;
+
+      if (phase === "early") thisPenalty += 10;
+      if (phase === "middle") thisPenalty += 6;
+      if (tilesRemaining >= 14) thisPenalty += 8;
+      if (doubleTile === "0-0") thisPenalty += 14;
+
+      if (escapeChance < 35) thisPenalty += 10;
+      if (escapeChance > 65) thisPenalty -= 6;
+
+      penalty += thisPenalty;
+
+      if (doubleTile === "0-0") {
+        warnings.push("naked 0|0 danger: this can trap the +100 tile if zeros get closed");
+      } else {
+        warnings.push(`isolated double risk: ${tileLabel(doubleTile)} may become dead weight`);
+      }
+
+      warnings.push(`double escape chance for ${tileLabel(doubleTile)} is only ${escapeChance}%`);
+    }
+
+    if (isPlayableNow && escapeChance >= 60) {
+      reasons.push(`${tileLabel(doubleTile)} still has a reasonable escape path`);
+    }
+  });
+
+  return {
+    penalty: Math.max(0, Math.round(penalty)),
+    warnings: [...new Set(warnings)].slice(0, 4),
+    reasons: [...new Set(reasons)].slice(0, 3),
+  };
+}
+
+function getMoveRiskUpgrade({ move, myHand, remainingHand, newEnds, board, passLog, playedTiles }) {
+  const phase = getGamePhase(board);
+  const tilesRemaining = getTilesRemaining(board);
+  const beforeFlex = getFlexibilityScore(myHand, newEnds.leftEnd, newEnds.rightEnd);
+  const afterFlex = getFlexibilityScore(remainingHand, newEnds.leftEnd, newEnds.rightEnd);
+  const doubleRisk = getDoubleRiskReport({
+    remainingHand,
+    leftEnd: newEnds.leftEnd,
+    rightEnd: newEnds.rightEnd,
+    board,
+    passLog,
+    playedTiles: [...playedTiles, move.tile],
+  });
+
+  let adjustment = 0;
+  const reasons = [];
+  const warnings = [];
+
+  const flexDrop = beforeFlex - afterFlex;
+
+  if (afterFlex >= 70) {
+    adjustment += 10;
+    reasons.push("future flexibility stays strong after this move");
+  } else if (afterFlex <= 35) {
+    adjustment -= 14;
+    warnings.push("future flexibility becomes weak after this move");
+  }
+
+  if (flexDrop >= 25) {
+    adjustment -= 10;
+    warnings.push("this move gives up too much future flexibility");
+  }
+
+  if (phase === "early" && tilesRemaining >= 16) {
+    adjustment -= Math.round(doubleRisk.penalty * 1.15);
+    if (doubleRisk.penalty > 0) warnings.push("early hand penalty: too many tiles are still out to risk a dead double");
+  } else if (phase === "middle") {
+    adjustment -= doubleRisk.penalty;
+  } else {
+    adjustment -= Math.round(doubleRisk.penalty * 0.55);
+  }
+
+  warnings.push(...doubleRisk.warnings);
+  reasons.push(...doubleRisk.reasons);
+
+  return {
+    adjustment,
+    phase,
+    tilesRemaining,
+    beforeFlex,
+    afterFlex,
+    doubleRisk,
+    reasons: [...new Set(reasons)].slice(0, 5),
+    warnings: [...new Set(warnings)].slice(0, 6),
+  };
+}
+
+
 function getTeamBrain({ board, myHand, passLog, starter, leftEnd, rightEnd }) {
   const myTilesLeft = getEstimatedTilesLeft(board, "me", myHand);
   const partnerTilesLeft = getEstimatedTilesLeft(board, "partner", myHand);
@@ -624,6 +803,20 @@ function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board 
         0
       );
 
+      const riskUpgrade = getMoveRiskUpgrade({
+        move,
+        myHand,
+        remainingHand,
+        newEnds,
+        board,
+        passLog,
+        playedTiles,
+      });
+
+      score += riskUpgrade.adjustment;
+      reasons.push(...riskUpgrade.reasons);
+      warnings.push(...riskUpgrade.warnings);
+
       score += Math.min(20, pips * 1.5);
 
       if (pips >= 9) reasons.push("drops high pips");
@@ -756,6 +949,7 @@ function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board 
         capiReasons: capi.reasons,
         teamIntentLabel: teamBrain.label,
         teamBrain,
+        riskUpgrade,
         reasons: [...new Set(reasons)].slice(0, 5),
         warnings: [...new Set(warnings)].slice(0, 4),
       };
@@ -1319,6 +1513,9 @@ export default function App() {
                 <p>
                   Advisor mode: <strong>{best.teamIntentLabel || teamRead.label}</strong>
                 </p>
+                <p>
+                  Phase: <strong>{best.riskUpgrade?.phase}</strong> · Tiles out: <strong>{best.riskUpgrade?.tilesRemaining}</strong> · Flex after: <strong>{best.riskUpgrade?.afterFlex}/100</strong>
+                </p>
               </div>
               <div className={`score ${best.risk.toLowerCase()}`}>
                 {best.score}/100
@@ -1382,6 +1579,41 @@ export default function App() {
         )}
       </section>
 
+
+
+      {best?.riskUpgrade && (
+        <section className="panel risk-engine-panel">
+          <p className="step">Risk Engine</p>
+          <h2>Double risk / flexibility read</h2>
+
+          <div className="risk-grid">
+            <div>
+              <span>Game phase</span>
+              <strong>{best.riskUpgrade.phase}</strong>
+            </div>
+            <div>
+              <span>Tiles still out</span>
+              <strong>{best.riskUpgrade.tilesRemaining}</strong>
+            </div>
+            <div>
+              <span>Future flexibility</span>
+              <strong>{best.riskUpgrade.afterFlex}/100</strong>
+            </div>
+            <div>
+              <span>Dead double penalty</span>
+              <strong>{best.riskUpgrade.doubleRisk.penalty}</strong>
+            </div>
+          </div>
+
+          {best.riskUpgrade.warnings.length > 0 && (
+            <div className="risk-warnings">
+              {best.riskUpgrade.warnings.map((warning) => (
+                <span key={warning}>{warning}</span>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="panel odds-panel">
         <div className="section-head">
