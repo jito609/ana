@@ -136,7 +136,326 @@ function getPassWeakness(passLog) {
   return weakness;
 }
 
-function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog }) {
+
+function clampScore(value) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function getPlayedByPlayer(board, playerId) {
+  return board.filter((play) => play.playerId === playerId).map((play) => play.tile);
+}
+
+function getPlayerPassNumbers(passLog, playerId) {
+  const nums = [];
+  passLog
+    .filter((pass) => pass.playerId === playerId)
+    .forEach((pass) => {
+      if (pass.leftEnd !== null && !nums.includes(pass.leftEnd)) nums.push(pass.leftEnd);
+      if (pass.rightEnd !== null && !nums.includes(pass.rightEnd)) nums.push(pass.rightEnd);
+    });
+  return nums;
+}
+
+function getKnownPlayerProfile(board, passLog, playerId) {
+  const played = getPlayedByPlayer(board, playerId);
+  const passed = getPlayerPassNumbers(passLog, playerId);
+  const counts = NUMBERS.map((n) => ({
+    number: n,
+    playedCount: countNumberInTiles(played, n),
+    passed: passed.includes(n),
+  }));
+
+  return {
+    played,
+    passed,
+    counts,
+    strongNumbers: counts.filter((x) => x.playedCount >= 2 && !x.passed).map((x) => x.number),
+    weakNumbers: passed,
+  };
+}
+
+function estimateSeatCanAnswerNumber({ number, playerId, board, passLog, unknownTiles }) {
+  const profile = getKnownPlayerProfile(board, passLog, playerId);
+  const unknownCount = countNumberInTiles(unknownTiles, number);
+
+  let chance = 45;
+
+  if (profile.passed.includes(number)) chance -= 38;
+  if (profile.strongNumbers.includes(number)) chance += 22;
+  if (profile.played.some((tile) => parseTile(tile).includes(number))) chance += 8;
+
+  chance += Math.min(18, unknownCount * 3);
+
+  return clampScore(chance);
+}
+
+function estimateSeatCanPlayEnds({ playerId, leftEnd, rightEnd, board, passLog, unknownTiles }) {
+  if (leftEnd === null || rightEnd === null) return 0;
+
+  const leftChance = estimateSeatCanAnswerNumber({ number: leftEnd, playerId, board, passLog, unknownTiles });
+  const rightChance = estimateSeatCanAnswerNumber({ number: rightEnd, playerId, board, passLog, unknownTiles });
+
+  return clampScore(Math.max(leftChance, rightChance) + Math.min(leftChance, rightChance) * 0.25);
+}
+
+function estimateCapiChanceForMove({ move, myHand, board, passLog, leftEnd, rightEnd, playedTiles }) {
+  const newEnds = getNewEnds(move.tile, move.side, leftEnd, rightEnd);
+  const remainingHand = removeOneTile(myHand, move.tile);
+  const unknownTiles = getRemainingUnknownTiles(remainingHand, [...playedTiles, move.tile]);
+  const nextPlayer = getNextPlayerRight("me");
+  const matchingEnds = newEnds.leftEnd === newEnds.rightEnd;
+
+  let chance = 8;
+  const reasons = [];
+
+  if (matchingEnds) {
+    chance += 28;
+    reasons.push(`playing ${tileLabel(move.tile)} creates matching ${newEnds.leftEnd}/${newEnds.rightEnd} ends`);
+  }
+
+  const endNumber = matchingEnds ? newEnds.leftEnd : null;
+  if (endNumber !== null) {
+    const myControl = countNumberInTiles(remainingHand, endNumber);
+    const unknownCount = countNumberInTiles(unknownTiles, endNumber);
+    const rightOppPassed = getPlayerPassNumbers(passLog, "rightOpponent").includes(endNumber);
+    const leftOppPassed = getPlayerPassNumbers(passLog, "leftOpponent").includes(endNumber);
+    const partnerPassed = getPlayerPassNumbers(passLog, "partner").includes(endNumber);
+
+    chance += myControl * 10;
+    if (myControl >= 2) reasons.push(`you still control ${endNumber}s after the play`);
+
+    if (unknownCount <= 2) {
+      chance += 16;
+      reasons.push(`few unknown ${endNumber}s remain`);
+    }
+
+    if (rightOppPassed) {
+      chance += 14;
+      reasons.push("right opponent already passed on that number");
+    }
+
+    if (leftOppPassed) {
+      chance += 10;
+      reasons.push("left opponent already passed on that number");
+    }
+
+    if (partnerPassed) {
+      chance -= 10;
+      reasons.push("partner passed on that number, so it may hurt your team flow");
+    }
+  }
+
+  const remainingCount = remainingHand.length;
+  if (remainingCount <= 2) {
+    chance += 18;
+    reasons.push("you are close to going out");
+  } else if (remainingCount <= 4) {
+    chance += 8;
+    reasons.push("you are within striking distance");
+  }
+
+  const nextCanPlay = estimateSeatCanPlayEnds({
+    playerId: nextPlayer.id,
+    leftEnd: newEnds.leftEnd,
+    rightEnd: newEnds.rightEnd,
+    board,
+    passLog,
+    unknownTiles,
+  });
+
+  if (nextCanPlay < 35) {
+    chance += 12;
+    reasons.push(`next player to the right looks unlikely to answer`);
+  } else if (nextCanPlay > 70) {
+    chance -= 12;
+    reasons.push(`next player to the right may be able to answer`);
+  }
+
+  return {
+    chance: clampScore(chance),
+    reasons: reasons.slice(0, 4),
+  };
+}
+
+function estimateCloseoutOdds({ mode, myHand, board, passLog, leftEnd, rightEnd, playedTiles }) {
+  if (leftEnd === null || rightEnd === null) {
+    return {
+      chance: 0,
+      reasons: ["board has not started yet"],
+    };
+  }
+
+  const unknownTiles = getRemainingUnknownTiles(myHand, playedTiles);
+  const myPips = myHand.reduce((sum, tile) => sum + tilePips(tile), 0);
+
+  const rightOpponentPlayChance = estimateSeatCanPlayEnds({
+    playerId: "rightOpponent",
+    leftEnd,
+    rightEnd,
+    board,
+    passLog,
+    unknownTiles,
+  });
+
+  const partnerPlayChance = estimateSeatCanPlayEnds({
+    playerId: "partner",
+    leftEnd,
+    rightEnd,
+    board,
+    passLog,
+    unknownTiles,
+  });
+
+  const leftOpponentPlayChance = estimateSeatCanPlayEnds({
+    playerId: "leftOpponent",
+    leftEnd,
+    rightEnd,
+    board,
+    passLog,
+    unknownTiles,
+  });
+
+  const opponentWeakness =
+    (100 - rightOpponentPlayChance) * 0.45 +
+    (100 - leftOpponentPlayChance) * 0.35;
+
+  const partnerHelp = partnerPlayChance * 0.2;
+  const lowPipBonus = Math.max(0, 30 - myPips) * 1.1;
+  const handSizeBonus = Math.max(0, 7 - myHand.length) * 4;
+
+  let chance = 20 + opponentWeakness + partnerHelp + lowPipBonus + handSizeBonus;
+
+  const reasons = [];
+
+  if (myPips <= 10) reasons.push(`your remaining pips are low (${myPips})`);
+  else if (myPips >= 25) {
+    chance -= 12;
+    reasons.push(`your remaining pips are high (${myPips})`);
+  } else {
+    reasons.push(`your remaining pips are moderate (${myPips})`);
+  }
+
+  if (rightOpponentPlayChance < 40) reasons.push("right opponent looks weak on current ends");
+  if (leftOpponentPlayChance < 40) reasons.push("left opponent looks weak on current ends");
+  if (partnerPlayChance > 60) reasons.push("partner looks likely to keep the hand moving");
+
+  if (mode === "individual") {
+    chance -= 6;
+    reasons.push("individual closeout only compares you against the player to your right");
+  } else {
+    chance += 5;
+    reasons.push("team closeout compares your team against both opponents");
+  }
+
+  return {
+    chance: clampScore(chance),
+    reasons: reasons.slice(0, 5),
+    details: {
+      myPips,
+      rightOpponentPlayChance,
+      partnerPlayChance,
+      leftOpponentPlayChance,
+    },
+  };
+}
+
+function estimateZeroZeroBonus({ myHand, board, passLog, leftEnd, rightEnd, playedTiles }) {
+  if (!myHand.includes("0-0")) {
+    return {
+      chance: 0,
+      possible: false,
+      reasons: ["you do not currently have 0|0"],
+    };
+  }
+
+  const legalSides = getLegalSides("0-0", leftEnd, rightEnd);
+  const unknownTiles = getRemainingUnknownTiles(myHand, playedTiles);
+  let chance = 12;
+  const reasons = ["0|0 is still in your hand"];
+
+  if (legalSides.includes("left") || legalSides.includes("right")) {
+    chance += 32;
+    reasons.push("0|0 is playable right now");
+  }
+
+  const zeroControl = countNumberInTiles(myHand, 0);
+  const unknownZeros = countNumberInTiles(unknownTiles, 0);
+
+  chance += zeroControl * 6;
+
+  if (zeroControl >= 3) reasons.push("you have strong zero control");
+  if (unknownZeros <= 2) {
+    chance += 14;
+    reasons.push("few unknown zero tiles remain");
+  }
+
+  if (getPlayerPassNumbers(passLog, "rightOpponent").includes(0)) {
+    chance += 10;
+    reasons.push("right opponent has passed on zero");
+  }
+
+  if (getPlayerPassNumbers(passLog, "leftOpponent").includes(0)) {
+    chance += 8;
+    reasons.push("left opponent has passed on zero");
+  }
+
+  if (myHand.length <= 3) {
+    chance += 14;
+    reasons.push("you are close enough to realistically end with 0|0");
+  }
+
+  return {
+    chance: clampScore(chance),
+    possible: true,
+    reasons: reasons.slice(0, 5),
+  };
+}
+
+function getStrategicRead({ myHand, board, passLog, leftEnd, rightEnd, playedTiles, closeoutMode }) {
+  const unknownTiles = getRemainingUnknownTiles(myHand, playedTiles);
+  const profiles = PLAYERS_RIGHT_ORDER
+    .filter((player) => player.id !== "me")
+    .map((player) => ({
+      ...player,
+      profile: getKnownPlayerProfile(board, passLog, player.id),
+      playChance: estimateSeatCanPlayEnds({
+        playerId: player.id,
+        leftEnd,
+        rightEnd,
+        board,
+        passLog,
+        unknownTiles,
+      }),
+    }));
+
+  const closeout = estimateCloseoutOdds({
+    mode: closeoutMode,
+    myHand,
+    board,
+    passLog,
+    leftEnd,
+    rightEnd,
+    playedTiles,
+  });
+
+  const zeroZero = estimateZeroZeroBonus({
+    myHand,
+    board,
+    passLog,
+    leftEnd,
+    rightEnd,
+    playedTiles,
+  });
+
+  return {
+    profiles,
+    closeout,
+    zeroZero,
+  };
+}
+
+
+function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board = [] }) {
   if (leftEnd === null || rightEnd === null) {
     if (myHand.includes("6-6")) {
       return {
@@ -255,11 +574,23 @@ function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog }) {
       if (score >= 78) risk = "Low";
       if (score < 55) risk = "High";
 
+      const capi = estimateCapiChanceForMove({
+        move,
+        myHand,
+        board,
+        passLog,
+        leftEnd,
+        rightEnd,
+        playedTiles,
+      });
+
       return {
         ...move,
         newEnds,
         score,
         risk,
+        capiChance: capi.chance,
+        capiReasons: capi.reasons,
         reasons: [...new Set(reasons)].slice(0, 5),
         warnings: [...new Set(warnings)].slice(0, 4),
       };
@@ -419,6 +750,7 @@ export default function App() {
   const [playSide, setPlaySide] = useState("right");
 
   const [passLog, setPassLog] = useState([]);
+  const [closeoutMode, setCloseoutMode] = useState("team");
 
   const playedTiles = useMemo(() => board.map((play) => play.tile), [board]);
 
@@ -430,13 +762,27 @@ export default function App() {
   );
 
   const advisor = useMemo(
-    () => analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog }),
-    [myHand, playedTiles, leftEnd, rightEnd, passLog]
+    () => analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board }),
+    [myHand, playedTiles, leftEnd, rightEnd, passLog, board]
   );
 
   const best = advisor.moves[0] || null;
   const backup = advisor.moves[1] || null;
   const avoid = advisor.moves.length > 1 ? advisor.moves[advisor.moves.length - 1] : null;
+
+  const strategicRead = useMemo(
+    () =>
+      getStrategicRead({
+        myHand,
+        board,
+        passLog,
+        leftEnd,
+        rightEnd,
+        playedTiles,
+        closeoutMode,
+      }),
+    [myHand, board, passLog, leftEnd, rightEnd, playedTiles, closeoutMode]
+  );
 
   function addTileToHand(tile) {
     if (usedTiles.has(tile)) return;
@@ -573,6 +919,7 @@ export default function App() {
     setPlayTile("6-4");
     setPlaySide("right");
     setPassLog([]);
+    setCloseoutMode("team");
   }
 
   return (
@@ -716,6 +1063,9 @@ export default function App() {
                 <p>
                   New ends: <strong>{best.newEnds.leftEnd}</strong> / <strong>{best.newEnds.rightEnd}</strong>
                 </p>
+                <p>
+                  Capi chance after this move: <strong>{best.capiChance || 0}%</strong>
+                </p>
               </div>
               <div className={`score ${best.risk.toLowerCase()}`}>
                 {best.score}/100
@@ -770,13 +1120,76 @@ export default function App() {
                     <strong>#{index + 1}</strong>
                     <span>{tileLabel(move.tile)} on {move.side}</span>
                     <span>Ends {move.newEnds.leftEnd}/{move.newEnds.rightEnd}</span>
-                    <em>{move.score}/100</em>
+                    <em>{move.score}/100 · Capi {move.capiChance || 0}%</em>
                   </div>
                 ))}
               </div>
             </details>
           </>
         )}
+      </section>
+
+
+      <section className="panel odds-panel">
+        <div className="section-head">
+          <div>
+            <p className="step">Strategy read</p>
+            <h2>Win chance / Capi / Closeout odds</h2>
+          </div>
+
+          <label className="field mode-field">
+            <span>Closeout rule</span>
+            <select value={closeoutMode} onChange={(e) => setCloseoutMode(e.target.value)}>
+              <option value="team">Team closeout: my team must have less than their team</option>
+              <option value="individual">Individual closeout: I must have less than player to my right</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="odds-grid">
+          <div className="odds-card">
+            <span>Best move capi chance</span>
+            <strong>{best ? `${best.capiChance || 0}%` : "0%"}</strong>
+            <p>
+              {best && best.capiReasons?.length
+                ? best.capiReasons.join(" · ")
+                : "No capi setup found yet."}
+            </p>
+          </div>
+
+          <div className="odds-card">
+            <span>0|0 +100 finish chance</span>
+            <strong>{strategicRead.zeroZero.chance}%</strong>
+            <p>{strategicRead.zeroZero.reasons.join(" · ")}</p>
+          </div>
+
+          <div className="odds-card">
+            <span>Closeout win chance</span>
+            <strong>{strategicRead.closeout.chance}%</strong>
+            <p>{strategicRead.closeout.reasons.join(" · ")}</p>
+          </div>
+        </div>
+
+        <div className="read-grid">
+          {strategicRead.profiles.map((item) => (
+            <div key={item.id} className={`read-card ${item.team}`}>
+              <h3>{item.label}</h3>
+              <p>Chance they can answer current ends: <strong>{item.playChance}%</strong></p>
+              <p>
+                Strong numbers:{" "}
+                <strong>
+                  {item.profile.strongNumbers.length ? item.profile.strongNumbers.join(", ") : "none seen"}
+                </strong>
+              </p>
+              <p>
+                Passed/weak numbers:{" "}
+                <strong>
+                  {item.profile.weakNumbers.length ? item.profile.weakNumbers.join(", ") : "none"}
+                </strong>
+              </p>
+            </div>
+          ))}
+        </div>
       </section>
 
       <section className="panel">
