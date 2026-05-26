@@ -760,3 +760,61 @@ select option:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+.risk-engine-panel {
+  border-color: rgba(255, 123, 123, 0.26);
+}
+
+.risk-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+.risk-grid div {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(1, 4, 14, 0.34);
+}
+
+.risk-grid span {
+  color: #aeb8ce;
+  font-weight: 850;
+}
+
+.risk-grid strong {
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+  text-transform: capitalize;
+}
+
+.risk-warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.risk-warnings span {
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: rgba(255, 123, 123, 0.13);
+  color: #ffd1d1;
+  font-size: 0.84rem;
+  font-weight: 850;
+}
+
+@media (max-width: 900px) {
+  .risk-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .risk-grid {
+    grid-template-columns: 1fr;
+  }
+}
