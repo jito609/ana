@@ -87,6 +87,11 @@ function getNewEnds(tile, side, leftEnd, rightEnd) {
   return { leftEnd, rightEnd: newRight };
 }
 
+function getStarterEnds(tile, flipped) {
+  const [a, b] = parseTile(tile);
+  return flipped ? { leftEnd: b, rightEnd: a } : { leftEnd: a, rightEnd: b };
+}
+
 function removeOneTile(hand, tileToRemove) {
   let removed = false;
 
@@ -603,7 +608,11 @@ function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board 
   };
 }
 
-function Tile({ tile, onClick, disabled = false, selected = false, mini = false }) {
+function Tile({ tile, onClick, disabled = false, selected = false, mini = false, displayLeft = null, displayRight = null }) {
+  const [a, b] = parseTile(tile);
+  const left = displayLeft ?? a;
+  const right = displayRight ?? b;
+
   return (
     <button
       type="button"
@@ -611,9 +620,9 @@ function Tile({ tile, onClick, disabled = false, selected = false, mini = false 
       onClick={onClick}
       disabled={disabled}
     >
-      <span>{parseTile(tile)[0]}</span>
+      <span>{left}</span>
       <i />
-      <span>{parseTile(tile)[1]}</span>
+      <span>{right}</span>
     </button>
   );
 }
@@ -669,21 +678,21 @@ function BoardVisual({ board, leftEnd, rightEnd }) {
         <div className="wing left-wing">
           {leftPlays.map((play) => (
             <div key={play.id} className="board-tile-card">
-              <Tile tile={play.tile} disabled />
+              <Tile tile={play.tile} displayLeft={play.displayLeft} displayRight={play.displayRight} disabled />
               <small>{getPlayerLabel(play.playerId)}</small>
             </div>
           ))}
         </div>
 
         <div className="center-tile">
-          <Tile tile={center.tile} disabled />
+          <Tile tile={center.tile} displayLeft={center.displayLeft} displayRight={center.displayRight} disabled />
           <small>Start: {getPlayerLabel(center.playerId)}</small>
         </div>
 
         <div className="wing right-wing">
           {rightPlays.map((play) => (
             <div key={play.id} className="board-tile-card">
-              <Tile tile={play.tile} disabled />
+              <Tile tile={play.tile} displayLeft={play.displayLeft} displayRight={play.displayRight} disabled />
               <small>{getPlayerLabel(play.playerId)}</small>
             </div>
           ))}
@@ -744,6 +753,7 @@ export default function App() {
 
   const [starter, setStarter] = useState("me");
   const [starterTile, setStarterTile] = useState("6-6");
+  const [starterFlipped, setStarterFlipped] = useState(false);
 
   const [playPlayer, setPlayPlayer] = useState("me");
   const [playTile, setPlayTile] = useState("6-4");
@@ -794,11 +804,13 @@ export default function App() {
   }
 
   function startHand() {
-    const nextEnds = getNewEnds(starterTile, "center", null, null);
+    const nextEnds = getStarterEnds(starterTile, starterFlipped);
     const play = {
       id: Date.now(),
       playerId: starter,
       tile: starterTile,
+      displayLeft: nextEnds.leftEnd,
+      displayRight: nextEnds.rightEnd,
       side: "center",
       leftEndAfter: nextEnds.leftEnd,
       rightEndAfter: nextEnds.rightEnd,
@@ -824,10 +836,24 @@ export default function App() {
 
     const nextEnds = getNewEnds(tile, side, leftEnd, rightEnd);
 
+    const [a, b] = parseTile(tile);
+    let displayLeft = a;
+    let displayRight = b;
+
+    if (side === "left") {
+      displayRight = leftEnd;
+      displayLeft = a === leftEnd ? b : a;
+    } else if (side === "right") {
+      displayLeft = rightEnd;
+      displayRight = a === rightEnd ? b : a;
+    }
+
     const play = {
       id: Date.now(),
       playerId,
       tile,
+      displayLeft,
+      displayRight,
       side,
       leftEndAfter: nextEnds.leftEnd,
       rightEndAfter: nextEnds.rightEnd,
@@ -915,12 +941,15 @@ export default function App() {
     setCurrentTurn("me");
     setStarter("me");
     setStarterTile("6-6");
+    setStarterFlipped(false);
     setPlayPlayer("me");
     setPlayTile("6-4");
     setPlaySide("right");
     setPassLog([]);
     setCloseoutMode("team");
   }
+
+  const starterPreview = getStarterEnds(starterTile, starterFlipped);
 
   return (
     <main className="app">
@@ -979,12 +1008,23 @@ export default function App() {
             <TileSelect value={starterTile} onChange={setStarterTile} usedTiles={new Set(playedTiles)} allowUsed label="Starting tile" />
           </div>
 
+          <div className="starter-orientation">
+            <div>
+              <span>Starter orientation</span>
+              <strong>{starterPreview.leftEnd}|{starterPreview.rightEnd}</strong>
+              <small>Left end will be {starterPreview.leftEnd}, right end will be {starterPreview.rightEnd}</small>
+            </div>
+            <button className="ghost" type="button" onClick={() => setStarterFlipped((value) => !value)}>
+              Flip Starter Tile
+            </button>
+          </div>
+
           <button className="primary full-btn" type="button" onClick={startHand}>
             Start / Restart Board With This Tile
           </button>
 
           <div className="note">
-            First hand rule: use <strong>6|6</strong>. After that, select whoever starts each hand and the tile they played.
+            First hand rule: use <strong>6|6</strong>. For non-doubles like 6|2, use <strong>Flip Starter Tile</strong> if the board has it the other way.
           </div>
         </section>
 
