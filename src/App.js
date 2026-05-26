@@ -282,38 +282,8 @@ function clampScore(value) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-function getPlayedByPlayer(board, playerId) {
-  return board.filter((play) => play.playerId === playerId).map((play) => play.tile);
-}
 
-function getPlayerPassNumbers(passLog, playerId) {
-  const nums = [];
-  passLog
-    .filter((pass) => pass.playerId === playerId)
-    .forEach((pass) => {
-      if (pass.leftEnd !== null && !nums.includes(pass.leftEnd)) nums.push(pass.leftEnd);
-      if (pass.rightEnd !== null && !nums.includes(pass.rightEnd)) nums.push(pass.rightEnd);
-    });
-  return nums;
-}
 
-function getKnownPlayerProfile(board, passLog, playerId) {
-  const played = getPlayedByPlayer(board, playerId);
-  const passed = getPlayerPassNumbers(passLog, playerId);
-  const counts = NUMBERS.map((n) => ({
-    number: n,
-    playedCount: countNumberInTiles(played, n),
-    passed: passed.includes(n),
-  }));
-
-  return {
-    played,
-    passed,
-    counts,
-    strongNumbers: counts.filter((x) => x.playedCount >= 2 && !x.passed).map((x) => x.number),
-    weakNumbers: passed,
-  };
-}
 
 function estimateSeatCanAnswerNumber({ number, playerId, board, passLog, unknownTiles }) {
   const profile = getKnownPlayerProfile(board, passLog, playerId);
