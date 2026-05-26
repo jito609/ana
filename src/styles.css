@@ -646,3 +646,44 @@ select option:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+
+.starter-orientation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(1, 4, 14, 0.34);
+  border: 1px solid rgba(255, 211, 106, 0.22);
+}
+
+.starter-orientation div {
+  display: grid;
+  gap: 4px;
+}
+
+.starter-orientation span {
+  color: #aeb8ce;
+  font-size: 0.85rem;
+  font-weight: 850;
+}
+
+.starter-orientation strong {
+  color: #ffd36a;
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.starter-orientation small {
+  color: #e8ebf5;
+}
+
+@media (max-width: 620px) {
+  .starter-orientation {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
