@@ -687,3 +687,76 @@ select option:disabled {
     flex-direction: column;
   }
 }
+
+.team-brain-panel {
+  border-color: rgba(97, 242, 156, 0.26);
+}
+
+.team-strength {
+  padding: 10px 13px;
+  border-radius: 999px;
+  background: rgba(97, 242, 156, 0.12);
+  color: #bfffd7;
+  font-weight: 850;
+}
+
+.team-strength strong {
+  color: #61f29c;
+}
+
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.team-grid div {
+  display: grid;
+  gap: 5px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(1, 4, 14, 0.34);
+}
+
+.team-grid span {
+  color: #aeb8ce;
+  font-weight: 850;
+}
+
+.team-grid strong {
+  color: #fff;
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.team-grid small {
+  color: #cbd1e2;
+}
+
+.team-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.team-reasons span {
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: rgba(97, 242, 156, 0.12);
+  color: #bfffd7;
+  font-size: 0.84rem;
+  font-weight: 850;
+}
+
+@media (max-width: 900px) {
+  .team-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .team-grid {
+    grid-template-columns: 1fr;
+  }
+}
