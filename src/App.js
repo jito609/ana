@@ -4,9 +4,19 @@ import "./styles.css";
 const NUMBERS = [0, 1, 2, 3, 4, 5, 6];
 
 const SEATS = [
-  { id: "leftOpponent", label: "Left Opponent", type: "opponent" },
-  { id: "partner", label: "Partner", type: "partner" },
+  { id: "me", label: "Me", type: "me" },
   { id: "rightOpponent", label: "Right Opponent", type: "opponent" },
+  { id: "partner", label: "Partner", type: "partner" },
+  { id: "leftOpponent", label: "Left Opponent", type: "opponent" },
+];
+
+// Turn order always moves right:
+// Me -> Right Opponent -> Partner -> Left Opponent -> Me
+
+const CLUE_SEATS = [
+  { id: "rightOpponent", label: "Right Opponent", type: "opponent" },
+  { id: "partner", label: "Partner", type: "partner" },
+  { id: "leftOpponent", label: "Left Opponent", type: "opponent" },
 ];
 
 const DEFAULT_HAND = ["6-6", "6-4", "4-2", "3-3", "2-2", "5-2", "1-0"];
@@ -69,18 +79,30 @@ function legalSides(tile, leftEnd, rightEnd) {
   return sides;
 }
 
-function getLegalMoves(hand, leftEnd, rightEnd) {
+function getLegalMoves(hand, leftEnd, rightEnd, isFirstPlay) {
+  if (isFirstPlay) {
+    return hand.includes("6-6")
+      ? [{ tile: "6-6", side: "center", playedOn: 6, forced: true }]
+      : [];
+  }
+
   if (leftEnd === "" || rightEnd === "") return [];
+
   return hand.flatMap((tile) =>
     legalSides(tile, leftEnd, rightEnd).map((side) => ({
       tile,
       side,
       playedOn: side === "left" ? Number(leftEnd) : Number(rightEnd),
+      forced: false,
     }))
   );
 }
 
-function getNewEnds(move, leftEnd, rightEnd) {
+function getNewEnds(move, leftEnd, rightEnd, isFirstPlay) {
+  if (isFirstPlay || move.tile === "6-6" && move.side === "center") {
+    return { left: 6, right: 6 };
+  }
+
   const [a, b] = parseTile(move.tile);
   const playedOn = move.side === "left" ? Number(leftEnd) : Number(rightEnd);
   const newNumber = a === playedOn ? b : a;
@@ -103,6 +125,15 @@ function removeOneTile(hand, tileToRemove) {
 function getUnknownTiles(myHand, knownTiles, playedTiles) {
   const known = new Set([...myHand, ...knownTiles, ...playedTiles]);
   return FULL_SET.filter((tile) => !known.has(tile));
+}
+
+function getNextSeatRight(currentSeatId) {
+  const index = SEATS.findIndex((seat) => seat.id === currentSeatId);
+  return SEATS[(index + 1) % SEATS.length];
+}
+
+function getSeatLabel(seatId) {
+  return SEATS.find((seat) => seat.id === seatId)?.label || seatId;
 }
 
 function playerClueScoreForNumber(clue, number, role) {
@@ -163,17 +194,37 @@ function analyzeMove({
   gameMode,
   scoreUs,
   scoreThem,
+  isFirstPlay,
+  currentTurn,
 }) {
   const remainingHand = removeOneTile(myHand, move.tile);
-  const newEnds = getNewEnds(move, leftEnd, rightEnd);
+  const newEnds = getNewEnds(move, leftEnd, rightEnd, isFirstPlay);
   const exposed = [newEnds.left, newEnds.right];
   const knownClueTiles = Object.values(clues).flatMap((clue) => clue.knownTiles);
   const unknownTiles = getUnknownTiles(myHand, knownClueTiles, playedTiles);
+  const nextSeat = getNextSeatRight(currentTurn);
 
   let score = 50;
   const reasons = [];
   const warnings = [];
   const tags = [];
+
+  if (isFirstPlay) {
+    score = 100;
+    reasons.push("first hand must start with 6|6");
+    reasons.push(`after this play, turn moves right to ${nextSeat.label}`);
+    tags.push("Forced opener");
+    tags.push("6|6 start");
+    return {
+      ...move,
+      newEnds,
+      score,
+      risk: "Low",
+      tags,
+      reasons,
+      warnings,
+    };
+  }
 
   const playedPips = tilePips(move.tile);
   const remainingPips = remainingHand.reduce((sum, tile) => sum + tilePips(tile), 0);
@@ -231,7 +282,7 @@ function analyzeMove({
       tags.push("Tight board");
     }
 
-    SEATS.forEach((seat) => {
+    CLUE_SEATS.forEach((seat) => {
       const result = playerClueScoreForNumber(clues[seat.id], number, seat.type);
       score += result.score;
       result.notes.forEach((note) => {
@@ -240,6 +291,23 @@ function analyzeMove({
       });
     });
   });
+
+  const nextClue = clues[nextSeat.id];
+  if (nextClue) {
+    const nextWeakOnEitherEnd = exposed.some((n) => nextClue.passed.includes(n) || nextClue.weak.includes(n));
+    const nextStrongOnEitherEnd = exposed.some((n) => nextClue.strong.includes(n) || countNumberInTiles(nextClue.knownTiles, n) > 0);
+
+    if (nextWeakOnEitherEnd) {
+      score += 14;
+      reasons.push(`good pressure because the next player to the right (${nextSeat.label}) looks weak on one of these ends`);
+      tags.push("Right-side pressure");
+    }
+
+    if (nextStrongOnEitherEnd) {
+      score -= 12;
+      warnings.push(`be careful: the next player to the right (${nextSeat.label}) may be able to answer this`);
+    }
+  }
 
   const target = gameMode === "pr500" ? 500 : 200;
   const usNeed = target - Number(scoreUs || 0);
@@ -272,27 +340,33 @@ function analyzeMove({
   if (score >= 78) risk = "Low";
   if (score < 55) risk = "High";
 
+  reasons.push(`after this move, turn goes right to ${nextSeat.label}`);
+
   return {
     ...move,
     newEnds,
     score,
     risk,
     tags: [...new Set(tags)].slice(0, 5),
-    reasons: [...new Set(reasons)].slice(0, 6),
+    reasons: [...new Set(reasons)].slice(0, 7),
     warnings: [...new Set(warnings)].slice(0, 5),
   };
 }
 
 function analyzePosition(input) {
-  const legalMoves = getLegalMoves(input.myHand, input.leftEnd, input.rightEnd);
+  const legalMoves = getLegalMoves(input.myHand, input.leftEnd, input.rightEnd, input.isFirstPlay);
 
   if (!legalMoves.length) {
+    const message = input.isFirstPlay
+      ? "First hand must start with 6|6. You do not have 6|6 in your hand, so choose the player who has it as the starter."
+      : "No legal move. You should pass from this position.";
+
     return {
       best: null,
       backup: null,
       avoid: null,
       moves: [],
-      message: "No legal move. You should pass from this position.",
+      message,
     };
   }
 
@@ -319,11 +393,11 @@ function Tile({ tile, onClick, disabled = false }) {
   );
 }
 
-function NumberSelect({ label, value, onChange }) {
+function NumberSelect({ label, value, onChange, disabled = false }) {
   return (
     <label className="field">
       <span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
+      <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
         <option value="">?</option>
         {NUMBERS.map((n) => (
           <option key={n} value={n}>{n}</option>
@@ -478,6 +552,9 @@ export default function App() {
   const [gameMode, setGameMode] = useState("pr500");
   const [scoreUs, setScoreUs] = useState(0);
   const [scoreThem, setScoreThem] = useState(0);
+  const [isFirstPlay, setIsFirstPlay] = useState(false);
+  const [handStarter, setHandStarter] = useState("me");
+  const [currentTurn, setCurrentTurn] = useState("me");
   const [clues, setClues] = useState(DEFAULT_CLUES);
 
   const playedTiles = useMemo(
@@ -499,19 +576,23 @@ export default function App() {
     return new Set([...myHand, ...known, ...playedTiles]);
   }, [myHand, clues, playedTiles]);
 
+  const nextSeat = useMemo(() => getNextSeatRight(currentTurn), [currentTurn]);
+
   const analysis = useMemo(
     () =>
       analyzePosition({
         myHand,
-        leftEnd,
-        rightEnd,
+        leftEnd: isFirstPlay ? "6" : leftEnd,
+        rightEnd: isFirstPlay ? "6" : rightEnd,
         clues,
         playedTiles,
         gameMode,
         scoreUs,
         scoreThem,
+        isFirstPlay,
+        currentTurn,
       }),
-    [myHand, leftEnd, rightEnd, clues, playedTiles, gameMode, scoreUs, scoreThem]
+    [myHand, leftEnd, rightEnd, clues, playedTiles, gameMode, scoreUs, scoreThem, isFirstPlay, currentTurn]
   );
 
   function updateClue(seatId, newValue) {
@@ -529,7 +610,18 @@ export default function App() {
     setGameMode("pr500");
     setScoreUs(0);
     setScoreThem(0);
+    setIsFirstPlay(false);
+    setHandStarter("me");
+    setCurrentTurn("me");
     setClues(DEFAULT_CLUES);
+  }
+
+  function applyFirstHandStart() {
+    setIsFirstPlay(true);
+    setLeftEnd("6");
+    setRightEnd("6");
+    setPlayedText("");
+    setCurrentTurn(handStarter);
   }
 
   return (
@@ -539,8 +631,8 @@ export default function App() {
           <p className="eyebrow">Real-Life Domino Advisor</p>
           <h1>Enter your hand. Add clues. Get the best move.</h1>
           <p>
-            You do not need to know everyone’s full hand. Add what you know: exact tiles you saw,
-            passes, strong numbers, weak numbers, and partner clues.
+            Turn order is set to move right. First hand can be forced to start with 6|6.
+            For later hands, choose who starts and whose turn it is.
           </p>
         </div>
         <button type="button" className="ghost" onClick={resetDemo}>Reset demo</button>
@@ -549,16 +641,71 @@ export default function App() {
       <section className="quick-grid">
         <div className="panel">
           <p className="step">Step 2</p>
-          <h2>Board</h2>
+          <h2>Board and turn order</h2>
+
+          <div className="rule-box">
+            <strong>Table rule:</strong> play always moves right.
+            <span>{getSeatLabel(currentTurn)} plays now → next is {nextSeat.label}</span>
+          </div>
+
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={isFirstPlay}
+              onChange={(e) => {
+                setIsFirstPlay(e.target.checked);
+                if (e.target.checked) {
+                  setLeftEnd("6");
+                  setRightEnd("6");
+                  setPlayedText("");
+                  setCurrentTurn(handStarter);
+                }
+              }}
+            />
+            <span>This is the very first play of the first hand</span>
+          </label>
+
+          <div className="turn-grid">
+            <label className="field">
+              <span>Who starts this hand?</span>
+              <select
+                value={handStarter}
+                onChange={(e) => {
+                  setHandStarter(e.target.value);
+                  if (isFirstPlay) setCurrentTurn(e.target.value);
+                }}
+              >
+                {SEATS.map((seat) => (
+                  <option key={seat.id} value={seat.id}>{seat.label}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span>Whose turn is it now?</span>
+              <select value={currentTurn} onChange={(e) => setCurrentTurn(e.target.value)}>
+                {SEATS.map((seat) => (
+                  <option key={seat.id} value={seat.id}>{seat.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {isFirstPlay && (
+            <button className="primary" type="button" onClick={applyFirstHandStart}>
+              Force 6|6 opening setup
+            </button>
+          )}
+
           <div className="board-controls">
-            <NumberSelect label="Left end" value={leftEnd} onChange={setLeftEnd} />
-            <NumberSelect label="Right end" value={rightEnd} onChange={setRightEnd} />
+            <NumberSelect label="Left end" value={isFirstPlay ? "6" : leftEnd} onChange={setLeftEnd} disabled={isFirstPlay} />
+            <NumberSelect label="Right end" value={isFirstPlay ? "6" : rightEnd} onChange={setRightEnd} disabled={isFirstPlay} />
           </div>
 
           <div className="board-preview">
-            <div><small>Left</small><strong>{leftEnd || "?"}</strong></div>
-            <span>open ends</span>
-            <div><small>Right</small><strong>{rightEnd || "?"}</strong></div>
+            <div><small>Left</small><strong>{isFirstPlay ? "6" : leftEnd || "?"}</strong></div>
+            <span>{isFirstPlay ? "6|6 forced opener" : "open ends"}</span>
+            <div><small>Right</small><strong>{isFirstPlay ? "6" : rightEnd || "?"}</strong></div>
           </div>
         </div>
 
@@ -584,7 +731,12 @@ export default function App() {
           </div>
           <label className="field played">
             <span>Known played tiles</span>
-            <input value={playedText} onChange={(e) => setPlayedText(e.target.value)} placeholder="6-2 2-4 4-0" />
+            <input
+              value={playedText}
+              onChange={(e) => setPlayedText(e.target.value)}
+              placeholder={isFirstPlay ? "leave blank for first play" : "6-2 2-4 4-0"}
+              disabled={isFirstPlay}
+            />
           </label>
         </div>
       </section>
@@ -599,7 +751,7 @@ export default function App() {
           </div>
         </div>
         <div className="clue-grid">
-          {SEATS.map((seat) => (
+          {CLUE_SEATS.map((seat) => (
             <ClueCard
               key={seat.id}
               seat={seat}
@@ -614,6 +766,14 @@ export default function App() {
       <section className="panel result-panel">
         <p className="step">Step 4</p>
         <h2>Best move</h2>
+
+        {currentTurn !== "me" && (
+          <div className="notice">
+            You selected <strong>{getSeatLabel(currentTurn)}</strong> as the current turn.
+            This app only knows your full hand, so the best-move calculation is for your hand.
+            Change “Whose turn is it now?” to <strong>Me</strong> when you want the advisor to pick your move.
+          </div>
+        )}
 
         {!analysis.best ? (
           <div className="empty result-empty">{analysis.message}</div>
