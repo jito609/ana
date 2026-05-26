@@ -141,6 +141,142 @@ function getPassWeakness(passLog) {
   return weakness;
 }
 
+function getPlayedByPlayer(board, playerId) {
+  return board.filter((play) => play.playerId === playerId).map((play) => play.tile);
+}
+
+function getEstimatedTilesLeft(board, playerId, myHand) {
+  if (playerId === "me") return myHand.length;
+  const playedCount = board.filter((play) => play.playerId === playerId).length;
+  return Math.max(0, 7 - playedCount);
+}
+
+function getPlayerPassNumbers(passLog, playerId) {
+  const nums = [];
+  passLog
+    .filter((pass) => pass.playerId === playerId)
+    .forEach((pass) => {
+      if (pass.leftEnd !== null && !nums.includes(pass.leftEnd)) nums.push(pass.leftEnd);
+      if (pass.rightEnd !== null && !nums.includes(pass.rightEnd)) nums.push(pass.rightEnd);
+    });
+  return nums;
+}
+
+function getKnownPlayerProfile(board, passLog, playerId) {
+  const played = getPlayedByPlayer(board, playerId);
+  const passed = getPlayerPassNumbers(passLog, playerId);
+
+  const counts = NUMBERS.map((number) => ({
+    number,
+    playedCount: countNumberInTiles(played, number),
+    passed: passed.includes(number),
+  }));
+
+  return {
+    played,
+    passed,
+    strongNumbers: counts
+      .filter((item) => item.playedCount >= 2 && !item.passed)
+      .map((item) => item.number),
+    weakNumbers: passed,
+  };
+}
+
+function getMyHandStrength(myHand, leftEnd, rightEnd) {
+  if (!myHand.length) return { score: 0, reasons: ["no tiles in your hand"] };
+
+  const legalMoves = leftEnd === null || rightEnd === null
+    ? myHand
+    : myHand.filter((tile) => getLegalSides(tile, leftEnd, rightEnd).some((side) => side !== "center"));
+
+  const highPips = myHand.filter((tile) => tilePips(tile) >= 9).length;
+  const doubles = myHand.filter(isDouble).length;
+  const numbers = NUMBERS.map((number) => ({
+    number,
+    count: countNumberInTiles(myHand, number),
+  }));
+  const strongest = [...numbers].sort((a, b) => b.count - a.count)[0];
+
+  let score = 25;
+  const reasons = [];
+
+  score += legalMoves.length * 10;
+  score += highPips * 5;
+  score += doubles * 4;
+
+  if (strongest && strongest.count >= 4) {
+    score += 20;
+    reasons.push(`monster control in ${strongest.number}s`);
+  } else if (strongest && strongest.count >= 3) {
+    score += 10;
+    reasons.push(`strong control in ${strongest.number}s`);
+  }
+
+  if (legalMoves.length >= 3) reasons.push("you have multiple legal options");
+  if (highPips >= 3) reasons.push("you have heavy tiles that can pressure the hand");
+  if (doubles >= 2) reasons.push("you have multiple doubles");
+
+  return {
+    score: Math.max(0, Math.min(100, Math.round(score))),
+    reasons: reasons.length ? reasons : ["normal hand strength"],
+  };
+}
+
+function getTeamBrain({ board, myHand, passLog, starter, leftEnd, rightEnd }) {
+  const myTilesLeft = getEstimatedTilesLeft(board, "me", myHand);
+  const partnerTilesLeft = getEstimatedTilesLeft(board, "partner", myHand);
+  const rightOpponentTilesLeft = getEstimatedTilesLeft(board, "rightOpponent", myHand);
+  const leftOpponentTilesLeft = getEstimatedTilesLeft(board, "leftOpponent", myHand);
+  const lowestOpponentTiles = Math.min(rightOpponentTilesLeft, leftOpponentTilesLeft);
+  const myStrength = getMyHandStrength(myHand, leftEnd, rightEnd);
+
+  let mode = "balanced";
+  const reasons = [];
+
+  if (lowestOpponentTiles <= 2) {
+    mode = "blockOpponents";
+    reasons.push("an opponent is close to going out");
+  }
+
+  if (partnerTilesLeft < myTilesLeft) {
+    mode = "feedPartner";
+    reasons.push("partner has fewer tiles than you");
+  }
+
+  if (starter === "partner" && partnerTilesLeft <= myTilesLeft) {
+    mode = "feedPartner";
+    reasons.push("partner started the hand, so partner may have control");
+  }
+
+  if (myTilesLeft <= 2 && myTilesLeft <= partnerTilesLeft) {
+    mode = "takeOver";
+    reasons.push("you are closest to going out");
+  }
+
+  if (myStrength.score >= 78 && myTilesLeft <= partnerTilesLeft + 1) {
+    mode = "takeOver";
+    reasons.push("you have a monster hand, so taking over is better");
+  }
+
+  return {
+    mode,
+    label:
+      mode === "feedPartner"
+        ? "Play for Partner"
+        : mode === "blockOpponents"
+        ? "Block Opponents"
+        : mode === "takeOver"
+        ? "Take Over"
+        : "Balanced Team Play",
+    reasons,
+    myTilesLeft,
+    partnerTilesLeft,
+    rightOpponentTilesLeft,
+    leftOpponentTilesLeft,
+    myStrength,
+  };
+}
+
 
 function clampScore(value) {
   return Math.max(0, Math.min(100, Math.round(value)));
@@ -460,7 +596,7 @@ function getStrategicRead({ myHand, board, passLog, leftEnd, rightEnd, playedTil
 }
 
 
-function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board = [] }) {
+function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board = [], starter = "me" }) {
   if (leftEnd === null || rightEnd === null) {
     if (myHand.includes("6-6")) {
       return {
@@ -500,6 +636,7 @@ function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board 
 
   const unknownTiles = getRemainingUnknownTiles(myHand, playedTiles);
   const weakness = getPassWeakness(passLog);
+  const teamBrain = getTeamBrain({ board, myHand, passLog, starter, leftEnd, rightEnd });
 
   const moves = legalMoves
     .map((move) => {
@@ -568,10 +705,61 @@ function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board 
         }
 
         if (weakness.partner.includes(number)) {
-          score -= 10;
+          score -= teamBrain.mode === "feedPartner" ? 18 : 10;
           warnings.push(`partner passed on ${number}`);
         }
+
+        const partnerProfile = getKnownPlayerProfile(board, passLog, "partner");
+        const rightProfile = getKnownPlayerProfile(board, passLog, "rightOpponent");
+        const leftProfile = getKnownPlayerProfile(board, passLog, "leftOpponent");
+
+        if (teamBrain.mode === "feedPartner") {
+          if (partnerProfile.strongNumbers.includes(number)) {
+            score += 20;
+            reasons.push(`team play: this supports partner's strong ${number}s`);
+          }
+
+          if (partnerProfile.weakNumbers.includes(number)) {
+            score -= 16;
+            warnings.push(`team play warning: partner already passed on ${number}`);
+          }
+
+          if (weakness.rightOpponent.includes(number) || weakness.leftOpponent.includes(number)) {
+            score += 8;
+            reasons.push(`team play: this still pressures an opponent on ${number}`);
+          }
+        }
+
+        if (teamBrain.mode === "blockOpponents") {
+          if (rightProfile.weakNumbers.includes(number) || leftProfile.weakNumbers.includes(number)) {
+            score += 18;
+            reasons.push(`team play: attacks opponent weakness on ${number}`);
+          }
+
+          if (rightProfile.strongNumbers.includes(number) || leftProfile.strongNumbers.includes(number)) {
+            score -= 12;
+            warnings.push(`opponents have shown strength on ${number}`);
+          }
+        }
+
+        if (teamBrain.mode === "takeOver") {
+          if (followUpCount > 0) {
+            score += 12;
+            reasons.push("takeover mode: keeps you live to finish the hand");
+          } else {
+            score -= 10;
+            warnings.push("takeover warning: this may leave you stuck");
+          }
+        }
       });
+
+      if (teamBrain.mode === "feedPartner") {
+        reasons.push("advisor mode: play for partner");
+      } else if (teamBrain.mode === "blockOpponents") {
+        reasons.push("advisor mode: block opponents");
+      } else if (teamBrain.mode === "takeOver") {
+        reasons.push("advisor mode: take over with your hand");
+      }
 
       score = Math.max(0, Math.min(100, Math.round(score)));
 
@@ -596,6 +784,8 @@ function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board 
         risk,
         capiChance: capi.chance,
         capiReasons: capi.reasons,
+        teamIntentLabel: teamBrain.label,
+        teamBrain,
         reasons: [...new Set(reasons)].slice(0, 5),
         warnings: [...new Set(warnings)].slice(0, 4),
       };
@@ -772,13 +962,18 @@ export default function App() {
   );
 
   const advisor = useMemo(
-    () => analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board }),
-    [myHand, playedTiles, leftEnd, rightEnd, passLog, board]
+    () => analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board, starter }),
+    [myHand, playedTiles, leftEnd, rightEnd, passLog, board, starter]
   );
 
   const best = advisor.moves[0] || null;
   const backup = advisor.moves[1] || null;
   const avoid = advisor.moves.length > 1 ? advisor.moves[advisor.moves.length - 1] : null;
+
+  const teamRead = useMemo(
+    () => getTeamBrain({ board, myHand, passLog, starter, leftEnd, rightEnd }),
+    [board, myHand, passLog, starter, leftEnd, rightEnd]
+  );
 
   const strategicRead = useMemo(
     () =>
@@ -1079,6 +1274,51 @@ export default function App() {
         <BoardVisual board={board} leftEnd={leftEnd} rightEnd={rightEnd} />
       </section>
 
+
+      <section className="panel team-brain-panel">
+        <div className="section-head">
+          <div>
+            <p className="step">Team Brain</p>
+            <h2>{teamRead.label}</h2>
+          </div>
+          <div className="team-strength">
+            Hand strength: <strong>{teamRead.myStrength.score}/100</strong>
+          </div>
+        </div>
+
+        <div className="team-grid">
+          <div>
+            <span>Me</span>
+            <strong>{teamRead.myTilesLeft}</strong>
+            <small>tiles left</small>
+          </div>
+          <div>
+            <span>Partner</span>
+            <strong>{teamRead.partnerTilesLeft}</strong>
+            <small>estimated tiles left</small>
+          </div>
+          <div>
+            <span>Right Opp</span>
+            <strong>{teamRead.rightOpponentTilesLeft}</strong>
+            <small>estimated tiles left</small>
+          </div>
+          <div>
+            <span>Left Opp</span>
+            <strong>{teamRead.leftOpponentTilesLeft}</strong>
+            <small>estimated tiles left</small>
+          </div>
+        </div>
+
+        <div className="team-reasons">
+          {(teamRead.reasons.length ? teamRead.reasons : ["no major team pressure yet"]).map((reason) => (
+            <span key={reason}>{reason}</span>
+          ))}
+          {teamRead.myStrength.reasons.map((reason) => (
+            <span key={reason}>{reason}</span>
+          ))}
+        </div>
+      </section>
+
       <section className="panel result-panel">
         <p className="step">Advisor</p>
         <h2>Best move for me</h2>
@@ -1105,6 +1345,9 @@ export default function App() {
                 </p>
                 <p>
                   Capi chance after this move: <strong>{best.capiChance || 0}%</strong>
+                </p>
+                <p>
+                  Advisor mode: <strong>{best.teamIntentLabel || teamRead.label}</strong>
                 </p>
               </div>
               <div className={`score ${best.risk.toLowerCase()}`}>
