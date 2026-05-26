@@ -14,8 +14,8 @@ const DEFAULT_MY_HAND = ["6-6", "6-4", "5-2", "4-2", "3-3", "2-1", "1-0"];
 
 function buildFullSet() {
   const tiles = [];
-  for (let high = 0; high <= 6; high++) {
-    for (let low = 0; low <= high; low++) {
+  for (let high = 0; high <= 6; high += 1) {
+    for (let low = 0; low <= high; low += 1) {
       tiles.push(`${high}-${low}`);
     }
   }
@@ -89,13 +89,17 @@ function getNewEnds(tile, side, leftEnd, rightEnd) {
 
 function removeOneTile(hand, tileToRemove) {
   let removed = false;
-  return hand.filter((tile) => {
+
+  const nextHand = hand.filter((tile) => {
     if (!removed && tile === tileToRemove) {
       removed = true;
       return false;
     }
+
     return true;
   });
+
+  return nextHand;
 }
 
 function countNumberInTiles(tiles, number) {
@@ -119,9 +123,11 @@ function getPassWeakness(passLog) {
 
   passLog.forEach((pass) => {
     if (!weakness[pass.playerId]) return;
+
     if (pass.leftEnd !== null && !weakness[pass.playerId].includes(pass.leftEnd)) {
       weakness[pass.playerId].push(pass.leftEnd);
     }
+
     if (pass.rightEnd !== null && !weakness[pass.playerId].includes(pass.rightEnd)) {
       weakness[pass.playerId].push(pass.rightEnd);
     }
@@ -266,11 +272,11 @@ function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog }) {
   };
 }
 
-function Tile({ tile, onClick, disabled = false, selected = false }) {
+function Tile({ tile, onClick, disabled = false, selected = false, mini = false }) {
   return (
     <button
       type="button"
-      className={`tile ${selected ? "selected" : ""}`}
+      className={`tile ${selected ? "selected" : ""} ${mini ? "mini-tile" : ""}`}
       onClick={onClick}
       disabled={disabled}
     >
@@ -311,7 +317,7 @@ function TileSelect({ value, onChange, usedTiles, allowUsed = false, label = "Ti
   );
 }
 
-function BoardVisual({ board }) {
+function BoardVisual({ board, leftEnd, rightEnd }) {
   if (!board.length) {
     return (
       <div className="board-empty">
@@ -320,16 +326,80 @@ function BoardVisual({ board }) {
     );
   }
 
+  const center = board[0];
+  const leftPlays = board.filter((play, index) => index > 0 && play.side === "left").reverse();
+  const rightPlays = board.filter((play, index) => index > 0 && play.side === "right");
+
   return (
-    <div className="board-track">
-      {board.map((play, index) => (
-        <div key={play.id} className={`board-tile ${play.side}`}>
-          <Tile tile={play.tile} disabled />
-          <small>
-            {index + 1}. {getPlayerLabel(play.playerId)}
-          </small>
+    <div className="live-table">
+      <div className="end-pill">Left end: {leftEnd}</div>
+
+      <div className="domino-line">
+        <div className="wing left-wing">
+          {leftPlays.map((play) => (
+            <div key={play.id} className="board-tile-card">
+              <Tile tile={play.tile} disabled />
+              <small>{getPlayerLabel(play.playerId)}</small>
+            </div>
+          ))}
         </div>
-      ))}
+
+        <div className="center-tile">
+          <Tile tile={center.tile} disabled />
+          <small>Start: {getPlayerLabel(center.playerId)}</small>
+        </div>
+
+        <div className="wing right-wing">
+          {rightPlays.map((play) => (
+            <div key={play.id} className="board-tile-card">
+              <Tile tile={play.tile} disabled />
+              <small>{getPlayerLabel(play.playerId)}</small>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="end-pill">Right end: {rightEnd}</div>
+    </div>
+  );
+}
+
+function PlayerSummary({ player, board, passLog }) {
+  const played = board.filter((play) => play.playerId === player.id);
+  const passes = passLog.filter((pass) => pass.playerId === player.id);
+
+  return (
+    <div className={`summary-card ${player.team}`}>
+      <div className="summary-head">
+        <h3>{player.label}</h3>
+        <span>{played.length} played · {passes.length} passes</span>
+      </div>
+
+      <div className="summary-section">
+        <strong>Tiles played</strong>
+        {played.length ? (
+          <div className="summary-tiles">
+            {played.map((play) => (
+              <Tile key={play.id} tile={play.tile} disabled mini />
+            ))}
+          </div>
+        ) : (
+          <p>None yet</p>
+        )}
+      </div>
+
+      <div className="summary-section">
+        <strong>Passed on</strong>
+        {passes.length ? (
+          <div className="pass-chips">
+            {passes.map((pass) => (
+              <span key={pass.id}>{pass.leftEnd}/{pass.rightEnd}</span>
+            ))}
+          </div>
+        ) : (
+          <p>No passes</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -389,6 +459,7 @@ export default function App() {
     };
 
     setBoard([play]);
+    setPassLog([]);
     setLeftEnd(nextEnds.leftEnd);
     setRightEnd(nextEnds.rightEnd);
     setCurrentTurn(getNextPlayerRight(starter).id);
@@ -397,20 +468,21 @@ export default function App() {
       setMyHand((current) => removeOneTile(current, starterTile));
     }
 
-    setPlayPlayer(getNextPlayerRight(starter).id);
+    const next = getNextPlayerRight(starter);
+    setPlayPlayer(next.id);
   }
 
-  function addPlay() {
-    const sides = getLegalSides(playTile, leftEnd, rightEnd);
-    if (!sides.includes(playSide)) return;
+  function applyPlay(playerId, tile, side) {
+    const sides = getLegalSides(tile, leftEnd, rightEnd);
+    if (!sides.includes(side)) return false;
 
-    const nextEnds = getNewEnds(playTile, playSide, leftEnd, rightEnd);
+    const nextEnds = getNewEnds(tile, side, leftEnd, rightEnd);
 
     const play = {
       id: Date.now(),
-      playerId: playPlayer,
-      tile: playTile,
-      side: playSide,
+      playerId,
+      tile,
+      side,
       leftEndAfter: nextEnds.leftEnd,
       rightEndAfter: nextEnds.rightEnd,
     };
@@ -419,13 +491,24 @@ export default function App() {
     setLeftEnd(nextEnds.leftEnd);
     setRightEnd(nextEnds.rightEnd);
 
-    if (playPlayer === "me") {
-      setMyHand((current) => removeOneTile(current, playTile));
+    if (playerId === "me") {
+      setMyHand((current) => removeOneTile(current, tile));
     }
 
-    const next = getNextPlayerRight(playPlayer);
+    const next = getNextPlayerRight(playerId);
     setCurrentTurn(next.id);
     setPlayPlayer(next.id);
+
+    return true;
+  }
+
+  function addPlay() {
+    applyPlay(playPlayer, playTile, playSide);
+  }
+
+  function playRecommendedMove(move) {
+    if (!move) return;
+    applyPlay("me", move.tile, move.side);
   }
 
   function addPass() {
@@ -446,7 +529,16 @@ export default function App() {
 
   function undoLast() {
     const last = board[board.length - 1];
-    if (!last) return;
+
+    if (!last) {
+      const lastPass = passLog[passLog.length - 1];
+      if (!lastPass) return;
+
+      setPassLog((current) => current.slice(0, -1));
+      setCurrentTurn(lastPass.playerId);
+      setPlayPlayer(lastPass.playerId);
+      return;
+    }
 
     const newBoard = board.slice(0, -1);
     setBoard(newBoard);
@@ -488,10 +580,10 @@ export default function App() {
       <section className="hero">
         <div>
           <p className="eyebrow">Simple Live Domino Advisor</p>
-          <h1>Input plays as they happen. Get your best move.</h1>
+          <h1>Track the board live. Get your best move.</h1>
           <p>
-            Add your hand, start the board, then enter each tile played. The board updates live and
-            the advisor tells you what to play when it is your turn.
+            Add your hand, start the board, then enter each tile as it is played.
+            Your hand removes tiles automatically, the board updates, and every player gets a summary.
           </p>
         </div>
         <button className="ghost danger" type="button" onClick={resetEverything}>
@@ -499,7 +591,7 @@ export default function App() {
         </button>
       </section>
 
-      <section className="panel">
+      <section className="panel hand-panel">
         <div className="section-head">
           <div>
             <p className="step">Step 1</p>
@@ -540,7 +632,7 @@ export default function App() {
             <TileSelect value={starterTile} onChange={setStarterTile} usedTiles={new Set(playedTiles)} allowUsed label="Starting tile" />
           </div>
 
-          <button className="primary" type="button" onClick={startHand}>
+          <button className="primary full-btn" type="button" onClick={startHand}>
             Start / Restart Board With This Tile
           </button>
 
@@ -558,7 +650,7 @@ export default function App() {
             <span>Next after this always moves right.</span>
           </div>
 
-          <div className="form-grid">
+          <div className="form-grid add-play-grid">
             <PlayerSelect value={playPlayer} onChange={setPlayPlayer} label="Who played?" />
             <TileSelect value={playTile} onChange={setPlayTile} usedTiles={usedTiles} allowUsed={playPlayer === "me"} label="Tile played" />
             <label className="field">
@@ -597,7 +689,7 @@ export default function App() {
             </h2>
           </div>
         </div>
-        <BoardVisual board={board} />
+        <BoardVisual board={board} leftEnd={leftEnd} rightEnd={rightEnd} />
       </section>
 
       <section className="panel result-panel">
@@ -606,7 +698,8 @@ export default function App() {
 
         {currentTurn !== "me" && (
           <div className="notice">
-            It is currently <strong>{getPlayerLabel(currentTurn)}</strong>'s turn. Keep entering plays until it gets back to you.
+            It is currently <strong>{getPlayerLabel(currentTurn)}</strong>'s turn.
+            Keep entering plays until it gets back to you.
           </div>
         )}
 
@@ -629,6 +722,10 @@ export default function App() {
                 <small>{best.risk} risk</small>
               </div>
             </div>
+
+            <button className="primary full-btn" type="button" onClick={() => playRecommendedMove(best)}>
+              Play Recommended Move For Me
+            </button>
 
             <div className="small-results">
               {backup && (
@@ -682,19 +779,15 @@ export default function App() {
         )}
       </section>
 
-      {passLog.length > 0 && (
-        <section className="panel">
-          <p className="step">Pass tracker</p>
-          <h2>Passes remembered</h2>
-          <div className="pass-list">
-            {passLog.map((pass, index) => (
-              <div key={pass.id}>
-                #{index + 1} {getPlayerLabel(pass.playerId)} passed on ends {pass.leftEnd}/{pass.rightEnd}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      <section className="panel">
+        <p className="step">Live summary</p>
+        <h2>What everyone played / passed on</h2>
+        <div className="summary-grid">
+          {PLAYERS_RIGHT_ORDER.map((player) => (
+            <PlayerSummary key={player.id} player={player} board={board} passLog={passLog} />
+          ))}
+        </div>
+      </section>
     </main>
   );
 }
