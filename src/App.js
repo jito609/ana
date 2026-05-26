@@ -531,6 +531,195 @@ function estimateMyHandWinChance({ myHand, board, passLog, leftEnd, rightEnd, pl
 }
 
 
+
+function getPartnerPlanRead({ board, passLog, starter }) {
+  const partnerPlayed = getPlayedByPlayer(board, "partner");
+  const partnerPasses = getPlayerPassNumbers(passLog, "partner");
+  const partnerProfile = getKnownPlayerProfile(board, passLog, "partner");
+
+  const firstPartnerTile = partnerPlayed[0] || null;
+  const lastPartnerTile = partnerPlayed[partnerPlayed.length - 1] || null;
+
+  const reasons = [];
+
+  if (starter === "partner") {
+    reasons.push("partner started the hand, so treat partner as possible hand controller");
+  }
+
+  if (firstPartnerTile) {
+    reasons.push(`partner first showed ${tileLabel(firstPartnerTile)}`);
+  }
+
+  if (partnerProfile.strongNumbers.length) {
+    reasons.push(`partner appears strong in ${partnerProfile.strongNumbers.join(", ")}`);
+  }
+
+  if (partnerPasses.length) {
+    reasons.push(`partner has passed on ${partnerPasses.join(", ")}`);
+  }
+
+  return {
+    firstPartnerTile,
+    lastPartnerTile,
+    strongNumbers: partnerProfile.strongNumbers,
+    weakNumbers: partnerPasses,
+    reasons: reasons.length ? reasons : ["not enough partner information yet"],
+  };
+}
+
+function estimateTeamWinChance({ myHand, board, passLog, leftEnd, rightEnd, playedTiles, starter }) {
+  if (leftEnd === null || rightEnd === null) {
+    return {
+      chance: 50,
+      confidence: "Low",
+      label: "Not enough board data",
+      reasons: ["start the board first"],
+      details: {
+        partnerPlan: getPartnerPlanRead({ board, passLog, starter }),
+      },
+    };
+  }
+
+  const myRead = estimateMyHandWinChance({
+    myHand,
+    board,
+    passLog,
+    leftEnd,
+    rightEnd,
+    playedTiles,
+    starter,
+  });
+
+  const teamBrain = getTeamBrain({ board, myHand, passLog, starter, leftEnd, rightEnd });
+  const partnerPlan = getPartnerPlanRead({ board, passLog, starter });
+  const unknownTiles = getRemainingUnknownTiles(myHand, playedTiles);
+
+  const partnerCanPlay = estimateSeatCanPlayEnds({
+    playerId: "partner",
+    leftEnd,
+    rightEnd,
+    board,
+    passLog,
+    unknownTiles,
+  });
+
+  const rightOppCanPlay = estimateSeatCanPlayEnds({
+    playerId: "rightOpponent",
+    leftEnd,
+    rightEnd,
+    board,
+    passLog,
+    unknownTiles,
+  });
+
+  const leftOppCanPlay = estimateSeatCanPlayEnds({
+    playerId: "leftOpponent",
+    leftEnd,
+    rightEnd,
+    board,
+    passLog,
+    unknownTiles,
+  });
+
+  const partnerTilesLeft = getEstimatedTilesLeft(board, "partner", myHand);
+  const myTilesLeft = getEstimatedTilesLeft(board, "me", myHand);
+  const rightOppTilesLeft = getEstimatedTilesLeft(board, "rightOpponent", myHand);
+  const leftOppTilesLeft = getEstimatedTilesLeft(board, "leftOpponent", myHand);
+  const lowestTeamTiles = Math.min(myTilesLeft, partnerTilesLeft);
+  const lowestOppTiles = Math.min(rightOppTilesLeft, leftOppTilesLeft);
+
+  let chance = 45;
+  const reasons = [];
+
+  chance += (myRead.chance - 50) * 0.38;
+
+  if (partnerCanPlay >= 65) {
+    chance += 12;
+    reasons.push("partner likely can play on the current ends");
+  } else if (partnerCanPlay <= 35) {
+    chance -= 10;
+    reasons.push("partner may be weak on the current ends");
+  }
+
+  if (partnerPlan.strongNumbers.some((n) => n === leftEnd || n === rightEnd)) {
+    chance += 12;
+    reasons.push("current board supports numbers partner has been showing");
+  }
+
+  if (partnerPlan.weakNumbers.some((n) => n === leftEnd || n === rightEnd)) {
+    chance -= 10;
+    reasons.push("current board hits numbers partner already passed on");
+  }
+
+  if (lowestTeamTiles < lowestOppTiles) {
+    chance += 12;
+    reasons.push("your team has the tile-count advantage");
+  } else if (lowestOppTiles < lowestTeamTiles) {
+    chance -= 12;
+    reasons.push("opponents have the tile-count advantage");
+  }
+
+  if (rightOppCanPlay < 40) {
+    chance += 7;
+    reasons.push("right opponent looks weak on the current ends");
+  }
+
+  if (leftOppCanPlay < 40) {
+    chance += 7;
+    reasons.push("left opponent looks weak on the current ends");
+  }
+
+  if (teamBrain.mode === "feedPartner") {
+    chance += 6;
+    reasons.push("team brain says to play through partner");
+  }
+
+  if (teamBrain.mode === "blockOpponents") {
+    chance += 5;
+    reasons.push("team brain says blocking is urgent");
+  }
+
+  if (starter === "partner" && !partnerPlan.weakNumbers.length) {
+    chance += 6;
+    reasons.push("partner started and has not shown weakness yet");
+  }
+
+  const dataPoints = board.length + passLog.length;
+  let confidence = "Low";
+  if (dataPoints >= 10) confidence = "Medium";
+  if (dataPoints >= 18) confidence = "Higher";
+
+  // Prevent fake certainty. This is not a true simulator yet, it is a live estimate.
+  const capHigh = confidence === "Low" ? 78 : confidence === "Medium" ? 88 : 94;
+  const capLow = confidence === "Low" ? 22 : confidence === "Medium" ? 14 : 8;
+
+  chance = Math.max(capLow, Math.min(capHigh, Math.round(chance)));
+
+  let label = "Even / unclear";
+  if (chance >= 70) label = "Team advantage";
+  else if (chance >= 58) label = "Slight team edge";
+  else if (chance <= 35) label = "Team in danger";
+  else if (chance <= 45) label = "Slightly behind";
+
+  return {
+    chance,
+    confidence,
+    label,
+    reasons: [...new Set([...reasons, ...partnerPlan.reasons])].slice(0, 7),
+    details: {
+      partnerPlan,
+      partnerCanPlay,
+      rightOppCanPlay,
+      leftOppCanPlay,
+      myTilesLeft,
+      partnerTilesLeft,
+      rightOppTilesLeft,
+      leftOppTilesLeft,
+    },
+  };
+}
+
+
 function getMoveRiskUpgrade({ move, myHand, remainingHand, newEnds, board, passLog, playedTiles }) {
   const phase = getGamePhase(board);
   const tilesRemaining = getTilesRemaining(board);
@@ -605,14 +794,28 @@ function getTeamBrain({ board, myHand, passLog, starter, leftEnd, rightEnd }) {
     reasons.push("an opponent is close to going out");
   }
 
-  if (partnerTilesLeft < myTilesLeft) {
+  const partnerHasPassed = passLog.some((pass) => pass.playerId === "partner");
+  const iHaveTileAdvantage = myTilesLeft < partnerTilesLeft;
+  const iAmTiedOrAheadOfPartner = myTilesLeft <= partnerTilesLeft;
+
+  if (partnerTilesLeft < myTilesLeft && !partnerHasPassed) {
     mode = "feedPartner";
-    reasons.push("partner has fewer tiles than you");
+    reasons.push("partner has fewer tiles than you and has not shown weakness yet");
   }
 
-  if (starter === "partner" && partnerTilesLeft <= myTilesLeft) {
+  if (starter === "partner" && partnerTilesLeft <= myTilesLeft && !partnerHasPassed) {
     mode = "feedPartner";
-    reasons.push("partner started the hand, so partner may have control");
+    reasons.push("partner started the hand and has not passed, so partner may still have control");
+  }
+
+  if (partnerHasPassed && iAmTiedOrAheadOfPartner) {
+    mode = "takeOver";
+    reasons.push("partner passed and you now have the better hand position");
+  }
+
+  if (iHaveTileAdvantage) {
+    mode = "takeOver";
+    reasons.push("you have fewer tiles than partner, so protect your own out path");
   }
 
   if (myTilesLeft <= 2 && myTilesLeft <= partnerTilesLeft) {
@@ -1095,12 +1298,29 @@ function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board 
 
         if (teamBrain.mode === "takeOver") {
           if (followUpCount > 0) {
-            score += 12;
+            score += 16;
             reasons.push("takeover mode: keeps you live to finish the hand");
           } else {
-            score -= 10;
+            score -= 18;
             warnings.push("takeover warning: this may leave you stuck");
           }
+
+          const remainingDoubles = remainingHand.filter(isDouble);
+          remainingDoubles.forEach((doubleTile) => {
+            const [doubleNumber] = parseTile(doubleTile);
+            const doubleIsStillPlayable = exposed.includes(doubleNumber);
+            const doubleSupport = countNumberInTiles(remainingHand, doubleNumber);
+
+            if (!doubleIsStillPlayable && doubleSupport <= 2) {
+              score -= doubleTile === "0-0" ? 18 : 12;
+              warnings.push(`takeover warning: ${tileLabel(doubleTile)} becomes a dead double risk`);
+            }
+
+            if (doubleIsStillPlayable) {
+              score += 8;
+              reasons.push(`takeover mode: ${tileLabel(doubleTile)} still has an escape path`);
+            }
+          });
         }
       });
 
@@ -1352,6 +1572,20 @@ export default function App() {
   const winRead = useMemo(
     () =>
       estimateMyHandWinChance({
+        myHand,
+        board,
+        passLog,
+        leftEnd,
+        rightEnd,
+        playedTiles,
+        starter,
+      }),
+    [myHand, board, passLog, leftEnd, rightEnd, playedTiles, starter]
+  );
+
+  const teamWinRead = useMemo(
+    () =>
+      estimateTeamWinChance({
         myHand,
         board,
         passLog,
@@ -1675,15 +1909,33 @@ export default function App() {
             <p className="step">Live win chance</p>
             <h2>My hand win chance</h2>
           </div>
-          <div className="win-badge">
-            <strong>{winRead.chance}%</strong>
-            <span>{winRead.label}</span>
+          <div className="dual-win-badges">
+            <div className="win-badge">
+              <strong>{winRead.chance}%</strong>
+              <span>My hand · {winRead.label}</span>
+            </div>
+            <div className="win-badge team">
+              <strong>{teamWinRead.chance}%</strong>
+              <span>Team · {teamWinRead.label}</span>
+              <small>{teamWinRead.confidence} confidence</small>
+            </div>
           </div>
         </div>
 
+        <div className="meter-label">My hand win estimate</div>
         <div className="win-meter">
           <div style={{ width: `${winRead.chance}%` }} />
         </div>
+
+        <div className="meter-label">Team win estimate</div>
+        <div className="win-meter team-meter">
+          <div style={{ width: `${teamWinRead.chance}%` }} />
+        </div>
+
+        <p className="accuracy-note">
+          These percentages are live estimates, not guarantees. They become more useful as you enter more plays and passes.
+          The app caps the percentage based on confidence so it should no longer show fake 100% certainty early.
+        </p>
 
         <div className="win-stats">
           <div>
@@ -1708,6 +1960,15 @@ export default function App() {
           {winRead.reasons.map((reason) => (
             <span key={reason}>{reason}</span>
           ))}
+        </div>
+
+        <div className="team-win-read">
+          <h3>Team read</h3>
+          <div className="win-reasons">
+            {teamWinRead.reasons.map((reason) => (
+              <span key={reason}>{reason}</span>
+            ))}
+          </div>
         </div>
       </section>
 
