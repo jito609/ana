@@ -1,1691 +1,927 @@
-import React, { useMemo, useState } from "react";
-import "./styles.css";
-
-const NUMBERS = [0, 1, 2, 3, 4, 5, 6];
-
-const PLAYERS_RIGHT_ORDER = [
-  { id: "me", label: "Me", team: "us" },
-  { id: "rightOpponent", label: "Right Opponent", team: "them" },
-  { id: "partner", label: "Partner", team: "us" },
-  { id: "leftOpponent", label: "Left Opponent", team: "them" },
-];
-
-const DEFAULT_MY_HAND = ["6-6", "6-4", "5-2", "4-2", "3-3", "2-1", "1-0"];
-
-function buildFullSet() {
-  const tiles = [];
-  for (let high = 0; high <= 6; high += 1) {
-    for (let low = 0; low <= high; low += 1) {
-      tiles.push(`${high}-${low}`);
-    }
-  }
-  return tiles;
+* {
+  box-sizing: border-box;
 }
 
-const FULL_SET = buildFullSet();
-
-function parseTile(tile) {
-  return tile.split("-").map(Number);
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(255, 211, 106, 0.18), transparent 28rem),
+    linear-gradient(135deg, #080b14, #11192c 52%, #060711);
+  color: #f8f8fc;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-function normalizeTile(a, b) {
-  const x = Number(a);
-  const y = Number(b);
-  if (Number.isNaN(x) || Number.isNaN(y)) return "";
-  return x >= y ? `${x}-${y}` : `${y}-${x}`;
+button,
+input,
+select {
+  font: inherit;
 }
 
-function tileLabel(tile) {
-  return tile.replace("-", "|");
+button {
+  cursor: pointer;
 }
 
-function tilePips(tile) {
-  const [a, b] = parseTile(tile);
-  return a + b;
+button:disabled,
+select option:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
-function isDouble(tile) {
-  const [a, b] = parseTile(tile);
-  return a === b;
+.app {
+  width: min(1240px, calc(100% - 28px));
+  margin: 0 auto;
+  padding: 24px 0 70px;
 }
 
-function getPlayerLabel(id) {
-  return PLAYERS_RIGHT_ORDER.find((p) => p.id === id)?.label || id;
+.hero,
+.panel {
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 26px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(14px);
 }
 
-function getNextPlayerRight(id) {
-  const index = PLAYERS_RIGHT_ORDER.findIndex((p) => p.id === id);
-  return PLAYERS_RIGHT_ORDER[(index + 1) % PLAYERS_RIGHT_ORDER.length];
+.hero {
+  padding: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
 }
 
-function getLegalSides(tile, leftEnd, rightEnd) {
-  if (leftEnd === null || rightEnd === null) return ["center"];
-
-  const [a, b] = parseTile(tile);
-  const sides = [];
-
-  if (a === leftEnd || b === leftEnd) sides.push("left");
-  if (a === rightEnd || b === rightEnd) sides.push("right");
-
-  return sides;
+.hero h1 {
+  margin: 0;
+  max-width: 860px;
+  font-size: clamp(2rem, 5vw, 4.2rem);
+  line-height: 0.96;
+  letter-spacing: -0.07em;
 }
 
-function getNewEnds(tile, side, leftEnd, rightEnd) {
-  if (side === "center" || leftEnd === null || rightEnd === null) {
-    const [a, b] = parseTile(tile);
-    return { leftEnd: a, rightEnd: b };
-  }
-
-  const [a, b] = parseTile(tile);
-
-  if (side === "left") {
-    const newLeft = a === leftEnd ? b : a;
-    return { leftEnd: newLeft, rightEnd };
-  }
-
-  const newRight = a === rightEnd ? b : a;
-  return { leftEnd, rightEnd: newRight };
+.hero p {
+  max-width: 780px;
+  color: #cbd1e2;
+  line-height: 1.6;
 }
 
-function getStarterEnds(tile, flipped) {
-  const [a, b] = parseTile(tile);
-  return flipped ? { leftEnd: b, rightEnd: a } : { leftEnd: a, rightEnd: b };
+.eyebrow,
+.step {
+  margin: 0 0 9px;
+  color: #ffd36a;
+  font-size: 0.76rem;
+  font-weight: 950;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
-function removeOneTile(hand, tileToRemove) {
-  let removed = false;
-
-  const nextHand = hand.filter((tile) => {
-    if (!removed && tile === tileToRemove) {
-      removed = true;
-      return false;
-    }
-
-    return true;
-  });
-
-  return nextHand;
+.panel {
+  padding: 22px;
+  margin-top: 18px;
 }
 
-function countNumberInTiles(tiles, number) {
-  return tiles.reduce((total, tile) => {
-    const [a, b] = parseTile(tile);
-    return total + (a === number ? 1 : 0) + (b === number ? 1 : 0);
-  }, 0);
+.panel h2 {
+  margin: 0 0 16px;
+  font-size: 1.45rem;
 }
 
-function getRemainingUnknownTiles(myHand, playedTiles) {
-  const known = new Set([...myHand, ...playedTiles]);
-  return FULL_SET.filter((tile) => !known.has(tile));
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
 }
 
-function getPassWeakness(passLog) {
-  const weakness = {
-    rightOpponent: [],
-    partner: [],
-    leftOpponent: [],
-  };
-
-  passLog.forEach((pass) => {
-    if (!weakness[pass.playerId]) return;
-
-    if (pass.leftEnd !== null && !weakness[pass.playerId].includes(pass.leftEnd)) {
-      weakness[pass.playerId].push(pass.leftEnd);
-    }
-
-    if (pass.rightEnd !== null && !weakness[pass.playerId].includes(pass.rightEnd)) {
-      weakness[pass.playerId].push(pass.rightEnd);
-    }
-  });
-
-  return weakness;
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
 }
 
-function getPlayedByPlayer(board, playerId) {
-  return board.filter((play) => play.playerId === playerId).map((play) => play.tile);
+.ghost,
+.primary,
+.mini {
+  border: 1px solid rgba(255, 255, 255, 0.17);
+  border-radius: 15px;
+  padding: 12px 15px;
+  font-weight: 900;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
 }
 
-function getEstimatedTilesLeft(board, playerId, myHand) {
-  if (playerId === "me") return myHand.length;
-  const playedCount = board.filter((play) => play.playerId === playerId).length;
-  return Math.max(0, 7 - playedCount);
+.primary {
+  border: 0;
+  color: #1b1300;
+  background: linear-gradient(135deg, #ffd36a, #ff9f1c);
 }
 
-function getPlayerPassNumbers(passLog, playerId) {
-  const nums = [];
-  passLog
-    .filter((pass) => pass.playerId === playerId)
-    .forEach((pass) => {
-      if (pass.leftEnd !== null && !nums.includes(pass.leftEnd)) nums.push(pass.leftEnd);
-      if (pass.rightEnd !== null && !nums.includes(pass.rightEnd)) nums.push(pass.rightEnd);
-    });
-  return nums;
+.full-btn {
+  width: 100%;
+  margin-top: 14px;
 }
 
-function getKnownPlayerProfile(board, passLog, playerId) {
-  const played = getPlayedByPlayer(board, playerId);
-  const passed = getPlayerPassNumbers(passLog, playerId);
-
-  const counts = NUMBERS.map((number) => ({
-    number,
-    playedCount: countNumberInTiles(played, number),
-    passed: passed.includes(number),
-  }));
-
-  return {
-    played,
-    passed,
-    strongNumbers: counts
-      .filter((item) => item.playedCount >= 2 && !item.passed)
-      .map((item) => item.number),
-    weakNumbers: passed,
-  };
+.mini {
+  font-size: 0.82rem;
+  padding: 8px 10px;
 }
 
-function getMyHandStrength(myHand, leftEnd, rightEnd) {
-  if (!myHand.length) return { score: 0, reasons: ["no tiles in your hand"] };
-
-  const legalMoves = leftEnd === null || rightEnd === null
-    ? myHand
-    : myHand.filter((tile) => getLegalSides(tile, leftEnd, rightEnd).some((side) => side !== "center"));
-
-  const highPips = myHand.filter((tile) => tilePips(tile) >= 9).length;
-  const doubles = myHand.filter(isDouble).length;
-  const numbers = NUMBERS.map((number) => ({
-    number,
-    count: countNumberInTiles(myHand, number),
-  }));
-  const strongest = [...numbers].sort((a, b) => b.count - a.count)[0];
-
-  let score = 25;
-  const reasons = [];
-
-  score += legalMoves.length * 10;
-  score += highPips * 5;
-  score += doubles * 4;
-
-  if (strongest && strongest.count >= 4) {
-    score += 20;
-    reasons.push(`monster control in ${strongest.number}s`);
-  } else if (strongest && strongest.count >= 3) {
-    score += 10;
-    reasons.push(`strong control in ${strongest.number}s`);
-  }
-
-  if (legalMoves.length >= 3) reasons.push("you have multiple legal options");
-  if (highPips >= 3) reasons.push("you have heavy tiles that can pressure the hand");
-  if (doubles >= 2) reasons.push("you have multiple doubles");
-
-  return {
-    score: Math.max(0, Math.min(100, Math.round(score))),
-    reasons: reasons.length ? reasons : ["normal hand strength"],
-  };
+.danger {
+  color: #ffd1d1;
 }
 
-
-function getGamePhase(board) {
-  const playedCount = board.length;
-  if (playedCount <= 8) return "early";
-  if (playedCount <= 18) return "middle";
-  return "late";
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
 }
 
-function getTilesRemaining(board) {
-  return Math.max(0, 28 - board.length);
+.add-play-grid {
+  grid-template-columns: 1fr 1fr 1fr;
 }
 
-function getPlayableCount(hand, leftEnd, rightEnd) {
-  if (leftEnd === null || rightEnd === null) return hand.length;
-  return hand.filter((tile) => getLegalSides(tile, leftEnd, rightEnd).some((side) => side !== "center")).length;
+.field {
+  display: grid;
+  gap: 8px;
 }
 
-function getFlexibilityScore(hand, leftEnd, rightEnd) {
-  if (!hand.length) return 100;
-
-  const numbersCovered = new Set();
-  hand.forEach((tile) => {
-    const [a, b] = parseTile(tile);
-    numbersCovered.add(a);
-    numbersCovered.add(b);
-  });
-
-  const playableCount = getPlayableCount(hand, leftEnd, rightEnd);
-  const coverageScore = numbersCovered.size * 8;
-  const playableScore = playableCount * 14;
-  const handSizePenalty = Math.max(0, hand.length - 3) * 2;
-
-  return Math.max(0, Math.min(100, Math.round(coverageScore + playableScore - handSizePenalty)));
+.field span {
+  color: #dce1f2;
+  font-size: 0.85rem;
+  font-weight: 850;
 }
 
-function getDoubleEscapeChance({ doubleTile, hand, leftEnd, rightEnd, board, passLog, playedTiles }) {
-  if (!isDouble(doubleTile)) return 100;
-
-  const [number] = parseTile(doubleTile);
-  const unknownTiles = getRemainingUnknownTiles(hand, playedTiles);
-  const unknownCount = countNumberInTiles(unknownTiles, number);
-  const myCount = countNumberInTiles(hand, number);
-  const phase = getGamePhase(board);
-
-  let chance = 20;
-
-  if (leftEnd === number || rightEnd === number) chance += 35;
-  chance += myCount * 10;
-
-  if (unknownCount <= 2) chance += 15;
-  if (unknownCount >= 5) chance -= 12;
-
-  if (getPlayerPassNumbers(passLog, "rightOpponent").includes(number)) chance += 8;
-  if (getPlayerPassNumbers(passLog, "leftOpponent").includes(number)) chance += 8;
-  if (getPlayerPassNumbers(passLog, "partner").includes(number)) chance -= 10;
-
-  if (phase === "late") chance += 18;
-  if (phase === "early") chance -= 10;
-
-  return Math.max(0, Math.min(100, Math.round(chance)));
+.field select,
+.field input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  outline: none;
+  border-radius: 15px;
+  padding: 13px 14px;
+  color: #fff;
+  background: rgba(1, 4, 14, 0.58);
 }
 
-function getDoubleRiskReport({ remainingHand, leftEnd, rightEnd, board, passLog, playedTiles }) {
-  const phase = getGamePhase(board);
-  const tilesRemaining = getTilesRemaining(board);
-  const doubles = remainingHand.filter(isDouble);
-
-  let penalty = 0;
-  const warnings = [];
-  const reasons = [];
-
-  doubles.forEach((doubleTile) => {
-    const [number] = parseTile(doubleTile);
-    const supportCount = countNumberInTiles(remainingHand, number);
-    const escapeChance = getDoubleEscapeChance({
-      doubleTile,
-      hand: remainingHand,
-      leftEnd,
-      rightEnd,
-      board,
-      passLog,
-      playedTiles,
-    });
-
-    const isNaked = supportCount <= 2; // double itself counts as 2 pips of that number
-    const isPlayableNow = leftEnd === number || rightEnd === number;
-
-    if (isNaked && !isPlayableNow) {
-      let thisPenalty = 14;
-
-      if (phase === "early") thisPenalty += 10;
-      if (phase === "middle") thisPenalty += 6;
-      if (tilesRemaining >= 14) thisPenalty += 8;
-      if (doubleTile === "0-0") thisPenalty += 14;
-
-      if (escapeChance < 35) thisPenalty += 10;
-      if (escapeChance > 65) thisPenalty -= 6;
-
-      penalty += thisPenalty;
-
-      if (doubleTile === "0-0") {
-        warnings.push("naked 0|0 danger: this can trap the +100 tile if zeros get closed");
-      } else {
-        warnings.push(`isolated double risk: ${tileLabel(doubleTile)} may become dead weight`);
-      }
-
-      warnings.push(`double escape chance for ${tileLabel(doubleTile)} is only ${escapeChance}%`);
-    }
-
-    if (isPlayableNow && escapeChance >= 60) {
-      reasons.push(`${tileLabel(doubleTile)} still has a reasonable escape path`);
-    }
-  });
-
-  return {
-    penalty: Math.max(0, Math.round(penalty)),
-    warnings: [...new Set(warnings)].slice(0, 4),
-    reasons: [...new Set(reasons)].slice(0, 3),
-  };
+.hand-panel {
+  border-color: rgba(255, 211, 106, 0.25);
 }
 
-function getMoveRiskUpgrade({ move, myHand, remainingHand, newEnds, board, passLog, playedTiles }) {
-  const phase = getGamePhase(board);
-  const tilesRemaining = getTilesRemaining(board);
-  const beforeFlex = getFlexibilityScore(myHand, newEnds.leftEnd, newEnds.rightEnd);
-  const afterFlex = getFlexibilityScore(remainingHand, newEnds.leftEnd, newEnds.rightEnd);
-  const doubleRisk = getDoubleRiskReport({
-    remainingHand,
-    leftEnd: newEnds.leftEnd,
-    rightEnd: newEnds.rightEnd,
-    board,
-    passLog,
-    playedTiles: [...playedTiles, move.tile],
-  });
-
-  let adjustment = 0;
-  const reasons = [];
-  const warnings = [];
-
-  const flexDrop = beforeFlex - afterFlex;
-
-  if (afterFlex >= 70) {
-    adjustment += 10;
-    reasons.push("future flexibility stays strong after this move");
-  } else if (afterFlex <= 35) {
-    adjustment -= 14;
-    warnings.push("future flexibility becomes weak after this move");
-  }
-
-  if (flexDrop >= 25) {
-    adjustment -= 10;
-    warnings.push("this move gives up too much future flexibility");
-  }
-
-  if (phase === "early" && tilesRemaining >= 16) {
-    adjustment -= Math.round(doubleRisk.penalty * 1.15);
-    if (doubleRisk.penalty > 0) warnings.push("early hand penalty: too many tiles are still out to risk a dead double");
-  } else if (phase === "middle") {
-    adjustment -= doubleRisk.penalty;
-  } else {
-    adjustment -= Math.round(doubleRisk.penalty * 0.55);
-  }
-
-  warnings.push(...doubleRisk.warnings);
-  reasons.push(...doubleRisk.reasons);
-
-  return {
-    adjustment,
-    phase,
-    tilesRemaining,
-    beforeFlex,
-    afterFlex,
-    doubleRisk,
-    reasons: [...new Set(reasons)].slice(0, 5),
-    warnings: [...new Set(warnings)].slice(0, 6),
-  };
+.my-hand {
+  min-height: 78px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
-
-function getTeamBrain({ board, myHand, passLog, starter, leftEnd, rightEnd }) {
-  const myTilesLeft = getEstimatedTilesLeft(board, "me", myHand);
-  const partnerTilesLeft = getEstimatedTilesLeft(board, "partner", myHand);
-  const rightOpponentTilesLeft = getEstimatedTilesLeft(board, "rightOpponent", myHand);
-  const leftOpponentTilesLeft = getEstimatedTilesLeft(board, "leftOpponent", myHand);
-  const lowestOpponentTiles = Math.min(rightOpponentTilesLeft, leftOpponentTilesLeft);
-  const myStrength = getMyHandStrength(myHand, leftEnd, rightEnd);
-
-  let mode = "balanced";
-  const reasons = [];
-
-  if (lowestOpponentTiles <= 2) {
-    mode = "blockOpponents";
-    reasons.push("an opponent is close to going out");
-  }
-
-  if (partnerTilesLeft < myTilesLeft) {
-    mode = "feedPartner";
-    reasons.push("partner has fewer tiles than you");
-  }
-
-  if (starter === "partner" && partnerTilesLeft <= myTilesLeft) {
-    mode = "feedPartner";
-    reasons.push("partner started the hand, so partner may have control");
-  }
-
-  if (myTilesLeft <= 2 && myTilesLeft <= partnerTilesLeft) {
-    mode = "takeOver";
-    reasons.push("you are closest to going out");
-  }
-
-  if (myStrength.score >= 78 && myTilesLeft <= partnerTilesLeft + 1) {
-    mode = "takeOver";
-    reasons.push("you have a monster hand, so taking over is better");
-  }
-
-  return {
-    mode,
-    label:
-      mode === "feedPartner"
-        ? "Play for Partner"
-        : mode === "blockOpponents"
-        ? "Block Opponents"
-        : mode === "takeOver"
-        ? "Take Over"
-        : "Balanced Team Play",
-    reasons,
-    myTilesLeft,
-    partnerTilesLeft,
-    rightOpponentTilesLeft,
-    leftOpponentTilesLeft,
-    myStrength,
-  };
+.empty {
+  width: 100%;
+  color: #aeb8ce;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(1, 4, 14, 0.34);
 }
 
-
-function clampScore(value) {
-  return Math.max(0, Math.min(100, Math.round(value)));
+.tile {
+  display: inline-grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 7px;
+  min-width: 66px;
+  padding: 10px 8px;
+  border-radius: 15px;
+  border: 2px solid rgba(255, 255, 255, 0.24);
+  color: #111827;
+  background: linear-gradient(180deg, #fff, #dfe4ee);
+  font-weight: 950;
+  box-shadow: 0 9px 18px rgba(0, 0, 0, 0.24);
 }
 
-
-
-
-function estimateSeatCanAnswerNumber({ number, playerId, board, passLog, unknownTiles }) {
-  const profile = getKnownPlayerProfile(board, passLog, playerId);
-  const unknownCount = countNumberInTiles(unknownTiles, number);
-
-  let chance = 45;
-
-  if (profile.passed.includes(number)) chance -= 38;
-  if (profile.strongNumbers.includes(number)) chance += 22;
-  if (profile.played.some((tile) => parseTile(tile).includes(number))) chance += 8;
-
-  chance += Math.min(18, unknownCount * 3);
-
-  return clampScore(chance);
+.mini-tile {
+  min-width: 52px;
+  padding: 7px 6px;
+  border-radius: 12px;
+  font-size: 0.82rem;
 }
 
-function estimateSeatCanPlayEnds({ playerId, leftEnd, rightEnd, board, passLog, unknownTiles }) {
-  if (leftEnd === null || rightEnd === null) return 0;
-
-  const leftChance = estimateSeatCanAnswerNumber({ number: leftEnd, playerId, board, passLog, unknownTiles });
-  const rightChance = estimateSeatCanAnswerNumber({ number: rightEnd, playerId, board, passLog, unknownTiles });
-
-  return clampScore(Math.max(leftChance, rightChance) + Math.min(leftChance, rightChance) * 0.25);
+.tile:disabled {
+  opacity: 0.95;
 }
 
-function estimateCapiChanceForMove({ move, myHand, board, passLog, leftEnd, rightEnd, playedTiles }) {
-  const newEnds = getNewEnds(move.tile, move.side, leftEnd, rightEnd);
-  const remainingHand = removeOneTile(myHand, move.tile);
-  const unknownTiles = getRemainingUnknownTiles(remainingHand, [...playedTiles, move.tile]);
-  const nextPlayer = getNextPlayerRight("me");
-  const matchingEnds = newEnds.leftEnd === newEnds.rightEnd;
+.tile i {
+  width: 2px;
+  height: 24px;
+  background: #111827;
+  opacity: 0.34;
+}
 
-  let chance = 8;
-  const reasons = [];
+.mini-tile i {
+  height: 18px;
+}
 
-  if (matchingEnds) {
-    chance += 28;
-    reasons.push(`playing ${tileLabel(move.tile)} creates matching ${newEnds.leftEnd}/${newEnds.rightEnd} ends`);
-  }
+.picker {
+  margin-top: 14px;
+}
 
-  const endNumber = matchingEnds ? newEnds.leftEnd : null;
-  if (endNumber !== null) {
-    const myControl = countNumberInTiles(remainingHand, endNumber);
-    const unknownCount = countNumberInTiles(unknownTiles, endNumber);
-    const rightOppPassed = getPlayerPassNumbers(passLog, "rightOpponent").includes(endNumber);
-    const leftOppPassed = getPlayerPassNumbers(passLog, "leftOpponent").includes(endNumber);
-    const partnerPassed = getPlayerPassNumbers(passLog, "partner").includes(endNumber);
+.picker summary {
+  color: #ffd36a;
+  cursor: pointer;
+  font-weight: 950;
+}
 
-    chance += myControl * 10;
-    if (myControl >= 2) reasons.push(`you still control ${endNumber}s after the play`);
+.tile-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
+  gap: 8px;
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(1, 4, 14, 0.35);
+}
 
-    if (unknownCount <= 2) {
-      chance += 16;
-      reasons.push(`few unknown ${endNumber}s remain`);
-    }
+.note,
+.turn-banner,
+.notice {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 18px;
+  line-height: 1.45;
+  color: #ffe7aa;
+  background: rgba(255, 211, 106, 0.1);
+  border: 1px solid rgba(255, 211, 106, 0.24);
+}
 
-    if (rightOppPassed) {
-      chance += 14;
-      reasons.push("right opponent already passed on that number");
-    }
+.turn-banner {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 14px;
+}
 
-    if (leftOppPassed) {
-      chance += 10;
-      reasons.push("left opponent already passed on that number");
-    }
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
 
-    if (partnerPassed) {
-      chance -= 10;
-      reasons.push("partner passed on that number, so it may hurt your team flow");
-    }
+.board-panel h2 {
+  font-size: 2rem;
+}
+
+.board-empty {
+  padding: 24px;
+  border-radius: 22px;
+  color: #aeb8ce;
+  background: rgba(1, 4, 14, 0.35);
+}
+
+.live-table {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at center, rgba(255, 211, 106, 0.12), transparent 18rem),
+    rgba(1, 4, 14, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.domino-line {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr);
+  gap: 16px;
+  align-items: center;
+  min-height: 170px;
+  overflow-x: auto;
+}
+
+.wing {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.left-wing {
+  justify-content: flex-end;
+}
+
+.right-wing {
+  justify-content: flex-start;
+}
+
+.center-tile,
+.board-tile-card {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  min-width: 78px;
+}
+
+.center-tile {
+  padding: 14px;
+  border-radius: 24px;
+  background: rgba(255, 211, 106, 0.13);
+  border: 1px solid rgba(255, 211, 106, 0.28);
+}
+
+.center-tile small,
+.board-tile-card small {
+  color: #cbd1e2;
+  text-align: center;
+  font-size: 0.74rem;
+}
+
+.end-pill {
+  justify-self: center;
+  padding: 9px 14px;
+  border-radius: 999px;
+  background: rgba(255, 211, 106, 0.12);
+  border: 1px solid rgba(255, 211, 106, 0.22);
+  color: #ffe6a4;
+  font-weight: 950;
+}
+
+.best-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 20px;
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(255, 211, 106, 0.2), rgba(255, 255, 255, 0.08));
+  border: 1px solid rgba(255, 211, 106, 0.35);
+}
+
+.best-card h3 {
+  margin: 0 0 8px;
+  font-size: clamp(1.8rem, 5vw, 3rem);
+  letter-spacing: -0.05em;
+}
+
+.best-card p {
+  margin: 0;
+  color: #d6dbea;
+}
+
+.score {
+  min-width: 115px;
+  display: grid;
+  gap: 3px;
+  text-align: center;
+  padding: 15px;
+  border-radius: 20px;
+  font-weight: 950;
+  background: rgba(1, 4, 14, 0.42);
+  font-size: 1.25rem;
+}
+
+.score small {
+  font-size: 0.78rem;
+}
+
+.score.low {
+  color: #61f29c;
+}
+
+.score.medium {
+  color: #ffd36a;
+}
+
+.score.high {
+  color: #ff7b7b;
+}
+
+.small-results,
+.explain-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.small-results div,
+.explain {
+  padding: 17px;
+  border-radius: 20px;
+  background: rgba(1, 4, 14, 0.34);
+}
+
+.small-results span {
+  display: block;
+  color: #aeb8ce;
+  margin-bottom: 5px;
+}
+
+.small-results strong {
+  color: #fff;
+}
+
+.explain h4 {
+  margin: 0 0 10px;
+}
+
+.explain ul {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.65;
+}
+
+.warn li,
+.warn p {
+  color: #ffd0d0;
+}
+
+.rankings {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.rank-row {
+  display: grid;
+  grid-template-columns: 52px 1.3fr 1fr 80px;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.rank-row strong {
+  color: #ffd36a;
+}
+
+.rank-row em {
+  color: #dbe1f1;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+.summary-card {
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(1, 4, 14, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.summary-card.us {
+  border-color: rgba(97, 242, 156, 0.24);
+}
+
+.summary-card.them {
+  border-color: rgba(255, 123, 123, 0.24);
+}
+
+.summary-head h3 {
+  margin: 0 0 4px;
+}
+
+.summary-head span {
+  color: #aeb8ce;
+  font-size: 0.85rem;
+}
+
+.summary-section {
+  margin-top: 14px;
+}
+
+.summary-section strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #ffd36a;
+}
+
+.summary-section p {
+  margin: 0;
+  color: #aeb8ce;
+}
+
+.summary-tiles,
+.pass-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.pass-chips span {
+  padding: 7px 9px;
+  border-radius: 999px;
+  background: rgba(255, 211, 106, 0.13);
+  color: #ffe5a2;
+  font-weight: 850;
+}
+
+@media (max-width: 1050px) {
+  .summary-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 
-  const remainingCount = remainingHand.length;
-  if (remainingCount <= 2) {
-    chance += 18;
-    reasons.push("you are close to going out");
-  } else if (remainingCount <= 4) {
-    chance += 8;
-    reasons.push("you are within striking distance");
+  .domino-line {
+    grid-template-columns: 1fr;
   }
 
-  const nextCanPlay = estimateSeatCanPlayEnds({
-    playerId: nextPlayer.id,
-    leftEnd: newEnds.leftEnd,
-    rightEnd: newEnds.rightEnd,
-    board,
-    passLog,
-    unknownTiles,
-  });
-
-  if (nextCanPlay < 35) {
-    chance += 12;
-    reasons.push(`next player to the right looks unlikely to answer`);
-  } else if (nextCanPlay > 70) {
-    chance -= 12;
-    reasons.push(`next player to the right may be able to answer`);
+  .left-wing,
+  .right-wing {
+    justify-content: flex-start;
+    overflow-x: auto;
   }
-
-  return {
-    chance: clampScore(chance),
-    reasons: reasons.slice(0, 4),
-  };
 }
 
-function estimateCloseoutOdds({ mode, myHand, board, passLog, leftEnd, rightEnd, playedTiles }) {
-  if (leftEnd === null || rightEnd === null) {
-    return {
-      chance: 0,
-      reasons: ["board has not started yet"],
-    };
+@media (max-width: 900px) {
+  .hero,
+  .best-card {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
-  const unknownTiles = getRemainingUnknownTiles(myHand, playedTiles);
-  const myPips = myHand.reduce((sum, tile) => sum + tilePips(tile), 0);
-
-  const rightOpponentPlayChance = estimateSeatCanPlayEnds({
-    playerId: "rightOpponent",
-    leftEnd,
-    rightEnd,
-    board,
-    passLog,
-    unknownTiles,
-  });
-
-  const partnerPlayChance = estimateSeatCanPlayEnds({
-    playerId: "partner",
-    leftEnd,
-    rightEnd,
-    board,
-    passLog,
-    unknownTiles,
-  });
-
-  const leftOpponentPlayChance = estimateSeatCanPlayEnds({
-    playerId: "leftOpponent",
-    leftEnd,
-    rightEnd,
-    board,
-    passLog,
-    unknownTiles,
-  });
-
-  const opponentWeakness =
-    (100 - rightOpponentPlayChance) * 0.45 +
-    (100 - leftOpponentPlayChance) * 0.35;
-
-  const partnerHelp = partnerPlayChance * 0.2;
-  const lowPipBonus = Math.max(0, 30 - myPips) * 1.1;
-  const handSizeBonus = Math.max(0, 7 - myHand.length) * 4;
-
-  let chance = 20 + opponentWeakness + partnerHelp + lowPipBonus + handSizeBonus;
-
-  const reasons = [];
-
-  if (myPips <= 10) reasons.push(`your remaining pips are low (${myPips})`);
-  else if (myPips >= 25) {
-    chance -= 12;
-    reasons.push(`your remaining pips are high (${myPips})`);
-  } else {
-    reasons.push(`your remaining pips are moderate (${myPips})`);
+  .grid,
+  .small-results,
+  .explain-grid {
+    grid-template-columns: 1fr;
   }
 
-  if (rightOpponentPlayChance < 40) reasons.push("right opponent looks weak on current ends");
-  if (leftOpponentPlayChance < 40) reasons.push("left opponent looks weak on current ends");
-  if (partnerPlayChance > 60) reasons.push("partner looks likely to keep the hand moving");
-
-  if (mode === "individual") {
-    chance -= 6;
-    reasons.push("individual closeout only compares you against the player to your right");
-  } else {
-    chance += 5;
-    reasons.push("team closeout compares your team against both opponents");
+  .add-play-grid {
+    grid-template-columns: 1fr;
   }
-
-  return {
-    chance: clampScore(chance),
-    reasons: reasons.slice(0, 5),
-    details: {
-      myPips,
-      rightOpponentPlayChance,
-      partnerPlayChance,
-      leftOpponentPlayChance,
-    },
-  };
 }
 
-function estimateZeroZeroBonus({ myHand, board, passLog, leftEnd, rightEnd, playedTiles }) {
-  if (!myHand.includes("0-0")) {
-    return {
-      chance: 0,
-      possible: false,
-      reasons: ["you do not currently have 0|0"],
-    };
+@media (max-width: 620px) {
+  .form-grid,
+  .rank-row,
+  .summary-grid {
+    grid-template-columns: 1fr;
   }
 
-  const legalSides = getLegalSides("0-0", leftEnd, rightEnd);
-  const unknownTiles = getRemainingUnknownTiles(myHand, playedTiles);
-  let chance = 12;
-  const reasons = ["0|0 is still in your hand"];
-
-  if (legalSides.includes("left") || legalSides.includes("right")) {
-    chance += 32;
-    reasons.push("0|0 is playable right now");
+  .rank-row span,
+  .rank-row em {
+    grid-column: 1;
   }
-
-  const zeroControl = countNumberInTiles(myHand, 0);
-  const unknownZeros = countNumberInTiles(unknownTiles, 0);
-
-  chance += zeroControl * 6;
-
-  if (zeroControl >= 3) reasons.push("you have strong zero control");
-  if (unknownZeros <= 2) {
-    chance += 14;
-    reasons.push("few unknown zero tiles remain");
-  }
-
-  if (getPlayerPassNumbers(passLog, "rightOpponent").includes(0)) {
-    chance += 10;
-    reasons.push("right opponent has passed on zero");
-  }
-
-  if (getPlayerPassNumbers(passLog, "leftOpponent").includes(0)) {
-    chance += 8;
-    reasons.push("left opponent has passed on zero");
-  }
-
-  if (myHand.length <= 3) {
-    chance += 14;
-    reasons.push("you are close enough to realistically end with 0|0");
-  }
-
-  return {
-    chance: clampScore(chance),
-    possible: true,
-    reasons: reasons.slice(0, 5),
-  };
 }
 
-function getStrategicRead({ myHand, board, passLog, leftEnd, rightEnd, playedTiles, closeoutMode }) {
-  const unknownTiles = getRemainingUnknownTiles(myHand, playedTiles);
-  const profiles = PLAYERS_RIGHT_ORDER
-    .filter((player) => player.id !== "me")
-    .map((player) => ({
-      ...player,
-      profile: getKnownPlayerProfile(board, passLog, player.id),
-      playChance: estimateSeatCanPlayEnds({
-        playerId: player.id,
-        leftEnd,
-        rightEnd,
-        board,
-        passLog,
-        unknownTiles,
-      }),
-    }));
+.mode-field {
+  min-width: min(440px, 100%);
+}
 
-  const closeout = estimateCloseoutOdds({
-    mode: closeoutMode,
-    myHand,
-    board,
-    passLog,
-    leftEnd,
-    rightEnd,
-    playedTiles,
-  });
+.odds-panel {
+  border-color: rgba(255, 211, 106, 0.28);
+}
 
-  const zeroZero = estimateZeroZeroBonus({
-    myHand,
-    board,
-    passLog,
-    leftEnd,
-    rightEnd,
-    playedTiles,
-  });
+.odds-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
 
-  return {
-    profiles,
-    closeout,
-    zeroZero,
-  };
+.odds-card {
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(1, 4, 14, 0.36);
+  border: 1px solid rgba(255, 211, 106, 0.18);
+}
+
+.odds-card span {
+  display: block;
+  color: #aeb8ce;
+  font-weight: 850;
+  margin-bottom: 8px;
+}
+
+.odds-card strong {
+  display: block;
+  color: #ffd36a;
+  font-size: 2.2rem;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.odds-card p {
+  margin: 0;
+  color: #e6e9f5;
+  line-height: 1.5;
+}
+
+.read-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.read-card {
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(1, 4, 14, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.read-card.us {
+  border-color: rgba(97, 242, 156, 0.24);
+}
+
+.read-card.them {
+  border-color: rgba(255, 123, 123, 0.24);
+}
+
+.read-card h3 {
+  margin: 0 0 10px;
+}
+
+.read-card p {
+  color: #cbd1e2;
+  line-height: 1.45;
+  margin: 8px 0;
+}
+
+.read-card strong {
+  color: #fff;
+}
+
+@media (max-width: 1050px) {
+  .odds-grid,
+  .read-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 
-function analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board = [], starter = "me" }) {
-  if (leftEnd === null || rightEnd === null) {
-    if (myHand.includes("6-6")) {
-      return {
-        message: "",
-        moves: [
-          {
-            tile: "6-6",
-            side: "center",
-            score: 100,
-            risk: "Low",
-            newEnds: { leftEnd: 6, rightEnd: 6 },
-            reasons: ["first hand starts with 6|6"],
-            warnings: [],
-          },
-        ],
-      };
-    }
-
-    return {
-      message: "Board has not started yet. If this is the first hand, the player with 6|6 starts.",
-      moves: [],
-    };
-  }
-
-  const legalMoves = myHand.flatMap((tile) =>
-    getLegalSides(tile, leftEnd, rightEnd)
-      .filter((side) => side !== "center")
-      .map((side) => ({ tile, side }))
-  );
-
-  if (!legalMoves.length) {
-    return {
-      message: "You have no legal play. You should pass.",
-      moves: [],
-    };
-  }
-
-  const unknownTiles = getRemainingUnknownTiles(myHand, playedTiles);
-  const weakness = getPassWeakness(passLog);
-  const teamBrain = getTeamBrain({ board, myHand, passLog, starter, leftEnd, rightEnd });
-
-  const moves = legalMoves
-    .map((move) => {
-      const newEnds = getNewEnds(move.tile, move.side, leftEnd, rightEnd);
-      const remainingHand = removeOneTile(myHand, move.tile);
-      const exposed = [newEnds.leftEnd, newEnds.rightEnd];
-
-      let score = 50;
-      const reasons = [];
-      const warnings = [];
-
-      const pips = tilePips(move.tile);
-      const followUpCount = exposed.reduce(
-        (sum, n) => sum + countNumberInTiles(remainingHand, n),
-        0
-      );
-
-      const riskUpgrade = getMoveRiskUpgrade({
-        move,
-        myHand,
-        remainingHand,
-        newEnds,
-        board,
-        passLog,
-        playedTiles,
-      });
-
-      score += riskUpgrade.adjustment;
-      reasons.push(...riskUpgrade.reasons);
-      warnings.push(...riskUpgrade.warnings);
-
-      score += Math.min(20, pips * 1.5);
-
-      if (pips >= 9) reasons.push("drops high pips");
-      if (isDouble(move.tile)) reasons.push("gets a double out");
-
-      if (remainingHand.length === 0) {
-        score += 100;
-        reasons.push("this gets you out");
-      }
-
-      if (followUpCount >= 2) {
-        score += 18;
-        reasons.push("keeps you with strong follow-up plays");
-      } else if (followUpCount === 1) {
-        score += 8;
-        reasons.push("keeps one follow-up play");
-      } else {
-        score -= 15;
-        warnings.push("you may not have a follow-up if the board comes back");
-      }
-
-      exposed.forEach((number) => {
-        const myCount = countNumberInTiles(remainingHand, number);
-        const unknownCount = countNumberInTiles(unknownTiles, number);
-
-        if (myCount >= 2) {
-          score += 12;
-          reasons.push(`you still control ${number}s`);
-        }
-
-        if (myCount === 0 && unknownCount >= 5) {
-          score -= 8;
-          warnings.push(`opens ${number}s without you controlling them`);
-        }
-
-        if (unknownCount <= 2) {
-          score += 8;
-          reasons.push(`${number}s look tight`);
-        }
-
-        if (weakness.rightOpponent.includes(number)) {
-          score += 12;
-          reasons.push(`right opponent passed on ${number}`);
-        }
-
-        if (weakness.leftOpponent.includes(number)) {
-          score += 8;
-          reasons.push(`left opponent passed on ${number}`);
-        }
-
-        if (weakness.partner.includes(number)) {
-          score -= teamBrain.mode === "feedPartner" ? 18 : 10;
-          warnings.push(`partner passed on ${number}`);
-        }
-
-        const partnerProfile = getKnownPlayerProfile(board, passLog, "partner");
-        const rightProfile = getKnownPlayerProfile(board, passLog, "rightOpponent");
-        const leftProfile = getKnownPlayerProfile(board, passLog, "leftOpponent");
-
-        if (teamBrain.mode === "feedPartner") {
-          if (partnerProfile.strongNumbers.includes(number)) {
-            score += 20;
-            reasons.push(`team play: this supports partner's strong ${number}s`);
-          }
-
-          if (partnerProfile.weakNumbers.includes(number)) {
-            score -= 16;
-            warnings.push(`team play warning: partner already passed on ${number}`);
-          }
-
-          if (weakness.rightOpponent.includes(number) || weakness.leftOpponent.includes(number)) {
-            score += 8;
-            reasons.push(`team play: this still pressures an opponent on ${number}`);
-          }
-        }
-
-        if (teamBrain.mode === "blockOpponents") {
-          if (rightProfile.weakNumbers.includes(number) || leftProfile.weakNumbers.includes(number)) {
-            score += 18;
-            reasons.push(`team play: attacks opponent weakness on ${number}`);
-          }
-
-          if (rightProfile.strongNumbers.includes(number) || leftProfile.strongNumbers.includes(number)) {
-            score -= 12;
-            warnings.push(`opponents have shown strength on ${number}`);
-          }
-        }
-
-        if (teamBrain.mode === "takeOver") {
-          if (followUpCount > 0) {
-            score += 12;
-            reasons.push("takeover mode: keeps you live to finish the hand");
-          } else {
-            score -= 10;
-            warnings.push("takeover warning: this may leave you stuck");
-          }
-        }
-      });
-
-      if (teamBrain.mode === "feedPartner") {
-        reasons.push("advisor mode: play for partner");
-      } else if (teamBrain.mode === "blockOpponents") {
-        reasons.push("advisor mode: block opponents");
-      } else if (teamBrain.mode === "takeOver") {
-        reasons.push("advisor mode: take over with your hand");
-      }
-
-      score = Math.max(0, Math.min(100, Math.round(score)));
-
-      let risk = "Medium";
-      if (score >= 78) risk = "Low";
-      if (score < 55) risk = "High";
-
-      const capi = estimateCapiChanceForMove({
-        move,
-        myHand,
-        board,
-        passLog,
-        leftEnd,
-        rightEnd,
-        playedTiles,
-      });
-
-      return {
-        ...move,
-        newEnds,
-        score,
-        risk,
-        capiChance: capi.chance,
-        capiReasons: capi.reasons,
-        teamIntentLabel: teamBrain.label,
-        teamBrain,
-        riskUpgrade,
-        reasons: [...new Set(reasons)].slice(0, 5),
-        warnings: [...new Set(warnings)].slice(0, 4),
-      };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  return {
-    message: "",
-    moves,
-  };
+.starter-orientation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(1, 4, 14, 0.34);
+  border: 1px solid rgba(255, 211, 106, 0.22);
 }
 
-function Tile({ tile, onClick, disabled = false, selected = false, mini = false, displayLeft = null, displayRight = null }) {
-  const [a, b] = parseTile(tile);
-  const left = displayLeft ?? a;
-  const right = displayRight ?? b;
-
-  return (
-    <button
-      type="button"
-      className={`tile ${selected ? "selected" : ""} ${mini ? "mini-tile" : ""}`}
-      onClick={onClick}
-      disabled={disabled}
-    >
-      <span>{left}</span>
-      <i />
-      <span>{right}</span>
-    </button>
-  );
+.starter-orientation div {
+  display: grid;
+  gap: 4px;
 }
 
-function PlayerSelect({ value, onChange, label = "Player" }) {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        {PLAYERS_RIGHT_ORDER.map((player) => (
-          <option key={player.id} value={player.id}>
-            {player.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
+.starter-orientation span {
+  color: #aeb8ce;
+  font-size: 0.85rem;
+  font-weight: 850;
 }
 
-function TileSelect({ value, onChange, usedTiles, allowUsed = false, label = "Tile" }) {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        {FULL_SET.map((tile) => (
-          <option key={tile} value={tile} disabled={!allowUsed && usedTiles.has(tile)}>
-            {tileLabel(tile)}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
+.starter-orientation strong {
+  color: #ffd36a;
+  font-size: 2rem;
+  line-height: 1;
 }
 
-function BoardVisual({ board, leftEnd, rightEnd }) {
-  if (!board.length) {
-    return (
-      <div className="board-empty">
-        Board is empty. Select who started and enter the first tile.
-      </div>
-    );
-  }
-
-  const center = board[0];
-  const leftPlays = board.filter((play, index) => index > 0 && play.side === "left").reverse();
-  const rightPlays = board.filter((play, index) => index > 0 && play.side === "right");
-
-  return (
-    <div className="live-table">
-      <div className="end-pill">Left end: {leftEnd}</div>
-
-      <div className="domino-line">
-        <div className="wing left-wing">
-          {leftPlays.map((play) => (
-            <div key={play.id} className="board-tile-card">
-              <Tile tile={play.tile} displayLeft={play.displayLeft} displayRight={play.displayRight} disabled />
-              <small>{getPlayerLabel(play.playerId)}</small>
-            </div>
-          ))}
-        </div>
-
-        <div className="center-tile">
-          <Tile tile={center.tile} displayLeft={center.displayLeft} displayRight={center.displayRight} disabled />
-          <small>Start: {getPlayerLabel(center.playerId)}</small>
-        </div>
-
-        <div className="wing right-wing">
-          {rightPlays.map((play) => (
-            <div key={play.id} className="board-tile-card">
-              <Tile tile={play.tile} displayLeft={play.displayLeft} displayRight={play.displayRight} disabled />
-              <small>{getPlayerLabel(play.playerId)}</small>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="end-pill">Right end: {rightEnd}</div>
-    </div>
-  );
+.starter-orientation small {
+  color: #e8ebf5;
 }
 
-function PlayerSummary({ player, board, passLog }) {
-  const played = board.filter((play) => play.playerId === player.id);
-  const passes = passLog.filter((pass) => pass.playerId === player.id);
-
-  return (
-    <div className={`summary-card ${player.team}`}>
-      <div className="summary-head">
-        <h3>{player.label}</h3>
-        <span>{played.length} played · {passes.length} passes</span>
-      </div>
-
-      <div className="summary-section">
-        <strong>Tiles played</strong>
-        {played.length ? (
-          <div className="summary-tiles">
-            {played.map((play) => (
-              <Tile key={play.id} tile={play.tile} disabled mini />
-            ))}
-          </div>
-        ) : (
-          <p>None yet</p>
-        )}
-      </div>
-
-      <div className="summary-section">
-        <strong>Passed on</strong>
-        {passes.length ? (
-          <div className="pass-chips">
-            {passes.map((pass) => (
-              <span key={pass.id}>{pass.leftEnd}/{pass.rightEnd}</span>
-            ))}
-          </div>
-        ) : (
-          <p>No passes</p>
-        )}
-      </div>
-    </div>
-  );
+@media (max-width: 620px) {
+  .starter-orientation {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
-export default function App() {
-  const [myHand, setMyHand] = useState(DEFAULT_MY_HAND);
-  const [board, setBoard] = useState([]);
-  const [leftEnd, setLeftEnd] = useState(null);
-  const [rightEnd, setRightEnd] = useState(null);
-  const [currentTurn, setCurrentTurn] = useState("me");
+.team-brain-panel {
+  border-color: rgba(97, 242, 156, 0.26);
+}
 
-  const [starter, setStarter] = useState("me");
-  const [starterTile, setStarterTile] = useState("6-6");
-  const [starterFlipped, setStarterFlipped] = useState(false);
+.team-strength {
+  padding: 10px 13px;
+  border-radius: 999px;
+  background: rgba(97, 242, 156, 0.12);
+  color: #bfffd7;
+  font-weight: 850;
+}
 
-  const [playPlayer, setPlayPlayer] = useState("me");
-  const [playTile, setPlayTile] = useState("6-4");
-  const [playSide, setPlaySide] = useState("right");
+.team-strength strong {
+  color: #61f29c;
+}
 
-  const [passLog, setPassLog] = useState([]);
-  const [closeoutMode, setCloseoutMode] = useState("team");
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
 
-  const playedTiles = useMemo(() => board.map((play) => play.tile), [board]);
+.team-grid div {
+  display: grid;
+  gap: 5px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(1, 4, 14, 0.34);
+}
 
-  const usedTiles = useMemo(() => new Set([...myHand, ...playedTiles]), [myHand, playedTiles]);
+.team-grid span {
+  color: #aeb8ce;
+  font-weight: 850;
+}
 
-  const legalSidesForSelected = useMemo(
-    () => getLegalSides(playTile, leftEnd, rightEnd),
-    [playTile, leftEnd, rightEnd]
-  );
+.team-grid strong {
+  color: #fff;
+  font-size: 2rem;
+  line-height: 1;
+}
 
-  const advisor = useMemo(
-    () => analyzeMyMove({ myHand, playedTiles, leftEnd, rightEnd, passLog, board, starter }),
-    [myHand, playedTiles, leftEnd, rightEnd, passLog, board, starter]
-  );
+.team-grid small {
+  color: #cbd1e2;
+}
 
-  const best = advisor.moves[0] || null;
-  const backup = advisor.moves[1] || null;
-  const avoid = advisor.moves.length > 1 ? advisor.moves[advisor.moves.length - 1] : null;
+.team-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
 
-  const teamRead = useMemo(
-    () => getTeamBrain({ board, myHand, passLog, starter, leftEnd, rightEnd }),
-    [board, myHand, passLog, starter, leftEnd, rightEnd]
-  );
+.team-reasons span {
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: rgba(97, 242, 156, 0.12);
+  color: #bfffd7;
+  font-size: 0.84rem;
+  font-weight: 850;
+}
 
-  const strategicRead = useMemo(
-    () =>
-      getStrategicRead({
-        myHand,
-        board,
-        passLog,
-        leftEnd,
-        rightEnd,
-        playedTiles,
-        closeoutMode,
-      }),
-    [myHand, board, passLog, leftEnd, rightEnd, playedTiles, closeoutMode]
-  );
-
-  function addTileToHand(tile) {
-    if (usedTiles.has(tile)) return;
-    setMyHand((current) => [...current, tile]);
+@media (max-width: 900px) {
+  .team-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
+}
 
-  function removeTileFromHand(index) {
-    setMyHand((current) => current.filter((_, i) => i !== index));
+@media (max-width: 620px) {
+  .team-grid {
+    grid-template-columns: 1fr;
   }
+}
 
-  function startHand() {
-    const nextEnds = getStarterEnds(starterTile, starterFlipped);
-    const play = {
-      id: Date.now(),
-      playerId: starter,
-      tile: starterTile,
-      displayLeft: nextEnds.leftEnd,
-      displayRight: nextEnds.rightEnd,
-      side: "center",
-      leftEndAfter: nextEnds.leftEnd,
-      rightEndAfter: nextEnds.rightEnd,
-    };
+.risk-engine-panel {
+  border-color: rgba(255, 123, 123, 0.26);
+}
 
-    setBoard([play]);
-    setPassLog([]);
-    setLeftEnd(nextEnds.leftEnd);
-    setRightEnd(nextEnds.rightEnd);
-    setCurrentTurn(getNextPlayerRight(starter).id);
+.risk-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
 
-    if (starter === "me") {
-      setMyHand((current) => removeOneTile(current, starterTile));
-    }
+.risk-grid div {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(1, 4, 14, 0.34);
+}
 
-    const next = getNextPlayerRight(starter);
-    setPlayPlayer(next.id);
+.risk-grid span {
+  color: #aeb8ce;
+  font-weight: 850;
+}
+
+.risk-grid strong {
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+  text-transform: capitalize;
+}
+
+.risk-warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.risk-warnings span {
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: rgba(255, 123, 123, 0.13);
+  color: #ffd1d1;
+  font-size: 0.84rem;
+  font-weight: 850;
+}
+
+@media (max-width: 900px) {
+  .risk-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
+}
 
-  function applyPlay(playerId, tile, side) {
-    const sides = getLegalSides(tile, leftEnd, rightEnd);
-    if (!sides.includes(side)) return false;
-
-    const nextEnds = getNewEnds(tile, side, leftEnd, rightEnd);
-
-    const [a, b] = parseTile(tile);
-    let displayLeft = a;
-    let displayRight = b;
-
-    if (side === "left") {
-      displayRight = leftEnd;
-      displayLeft = a === leftEnd ? b : a;
-    } else if (side === "right") {
-      displayLeft = rightEnd;
-      displayRight = a === rightEnd ? b : a;
-    }
-
-    const play = {
-      id: Date.now(),
-      playerId,
-      tile,
-      displayLeft,
-      displayRight,
-      side,
-      leftEndAfter: nextEnds.leftEnd,
-      rightEndAfter: nextEnds.rightEnd,
-    };
-
-    setBoard((current) => [...current, play]);
-    setLeftEnd(nextEnds.leftEnd);
-    setRightEnd(nextEnds.rightEnd);
-
-    if (playerId === "me") {
-      setMyHand((current) => removeOneTile(current, tile));
-    }
-
-    const next = getNextPlayerRight(playerId);
-    setCurrentTurn(next.id);
-    setPlayPlayer(next.id);
-
-    return true;
+@media (max-width: 620px) {
+  .risk-grid {
+    grid-template-columns: 1fr;
   }
+}
 
-  function addPlay() {
-    applyPlay(playPlayer, playTile, playSide);
+.win-chance-panel {
+  border-color: rgba(97, 242, 156, 0.28);
+}
+
+.win-badge {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  min-width: 135px;
+  padding: 14px 16px;
+  border-radius: 22px;
+  background: rgba(1, 4, 14, 0.42);
+  border: 1px solid rgba(97, 242, 156, 0.22);
+}
+
+.win-badge strong {
+  color: #61f29c;
+  font-size: 2.4rem;
+  line-height: 1;
+}
+
+.win-badge span {
+  color: #d8ffe5;
+  font-weight: 850;
+  text-align: center;
+}
+
+.win-meter {
+  width: 100%;
+  height: 18px;
+  overflow: hidden;
+  margin-top: 16px;
+  border-radius: 999px;
+  background: rgba(1, 4, 14, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.win-meter div {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ff7b7b, #ffd36a, #61f29c);
+  transition: width 250ms ease;
+}
+
+.win-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.win-stats div {
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(1, 4, 14, 0.34);
+}
+
+.win-stats span {
+  color: #aeb8ce;
+  font-weight: 850;
+}
+
+.win-stats strong {
+  color: #fff;
+  font-size: 1.45rem;
+  text-transform: capitalize;
+}
+
+.win-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.win-reasons span {
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: rgba(97, 242, 156, 0.12);
+  color: #bfffd7;
+  font-size: 0.84rem;
+  font-weight: 850;
+}
+
+@media (max-width: 900px) {
+  .win-stats {
+    grid-template-columns: repeat(2, 1fr);
   }
+}
 
-  function playRecommendedMove(move) {
-    if (!move) return;
-    applyPlay("me", move.tile, move.side);
+@media (max-width: 620px) {
+  .win-stats {
+    grid-template-columns: 1fr;
   }
+}
 
-  function addPass() {
-    setPassLog((current) => [
-      ...current,
-      {
-        id: Date.now(),
-        playerId: playPlayer,
-        leftEnd,
-        rightEnd,
-      },
-    ]);
-
-    const next = getNextPlayerRight(playPlayer);
-    setCurrentTurn(next.id);
-    setPlayPlayer(next.id);
-  }
-
-  function undoLast() {
-    const last = board[board.length - 1];
-
-    if (!last) {
-      const lastPass = passLog[passLog.length - 1];
-      if (!lastPass) return;
-
-      setPassLog((current) => current.slice(0, -1));
-      setCurrentTurn(lastPass.playerId);
-      setPlayPlayer(lastPass.playerId);
-      return;
-    }
-
-    const newBoard = board.slice(0, -1);
-    setBoard(newBoard);
-
-    if (last.playerId === "me") {
-      setMyHand((current) => [...current, last.tile]);
-    }
-
-    if (newBoard.length === 0) {
-      setLeftEnd(null);
-      setRightEnd(null);
-      setCurrentTurn("me");
-      setPlayPlayer("me");
-    } else {
-      const lastRemaining = newBoard[newBoard.length - 1];
-      setLeftEnd(lastRemaining.leftEndAfter);
-      setRightEnd(lastRemaining.rightEndAfter);
-      setCurrentTurn(last.playerId);
-      setPlayPlayer(last.playerId);
-    }
-  }
-
-  function resetEverything() {
-    setMyHand(DEFAULT_MY_HAND);
-    setBoard([]);
-    setLeftEnd(null);
-    setRightEnd(null);
-    setCurrentTurn("me");
-    setStarter("me");
-    setStarterTile("6-6");
-    setStarterFlipped(false);
-    setPlayPlayer("me");
-    setPlayTile("6-4");
-    setPlaySide("right");
-    setPassLog([]);
-    setCloseoutMode("team");
-  }
-
-  const starterPreview = getStarterEnds(starterTile, starterFlipped);
-
-  return (
-    <main className="app">
-      <section className="hero">
-        <div>
-          <p className="eyebrow">Simple Live Domino Advisor</p>
-          <h1>Track the board live. Get your best move.</h1>
-          <p>
-            Add your hand, start the board, then enter each tile as it is played.
-            Your hand removes tiles automatically, the board updates, and every player gets a summary.
-          </p>
-        </div>
-        <button className="ghost danger" type="button" onClick={resetEverything}>
-          Reset
-        </button>
-      </section>
-
-      <section className="panel hand-panel">
-        <div className="section-head">
-          <div>
-            <p className="step">Step 1</p>
-            <h2>My hand</h2>
-          </div>
-          <button className="mini danger" type="button" onClick={() => setMyHand([])}>
-            Clear hand
-          </button>
-        </div>
-
-        <div className="my-hand">
-          {myHand.length ? (
-            myHand.map((tile, index) => (
-              <Tile key={`${tile}-${index}`} tile={tile} onClick={() => removeTileFromHand(index)} />
-            ))
-          ) : (
-            <div className="empty">Tap tiles below to add your hand.</div>
-          )}
-        </div>
-
-        <details className="picker">
-          <summary>Add tiles to my hand</summary>
-          <div className="tile-grid">
-            {FULL_SET.map((tile) => (
-              <Tile key={tile} tile={tile} disabled={usedTiles.has(tile)} onClick={() => addTileToHand(tile)} />
-            ))}
-          </div>
-        </details>
-      </section>
-
-      <section className="grid">
-        <section className="panel">
-          <p className="step">Step 2</p>
-          <h2>Start the hand</h2>
-
-          <div className="form-grid">
-            <PlayerSelect value={starter} onChange={setStarter} label="Who started?" />
-            <TileSelect value={starterTile} onChange={setStarterTile} usedTiles={new Set(playedTiles)} allowUsed label="Starting tile" />
-          </div>
-
-          <div className="starter-orientation">
-            <div>
-              <span>Starter orientation</span>
-              <strong>{starterPreview.leftEnd}|{starterPreview.rightEnd}</strong>
-              <small>Left end will be {starterPreview.leftEnd}, right end will be {starterPreview.rightEnd}</small>
-            </div>
-            <button className="ghost" type="button" onClick={() => setStarterFlipped((value) => !value)}>
-              Flip Starter Tile
-            </button>
-          </div>
-
-          <button className="primary full-btn" type="button" onClick={startHand}>
-            Start / Restart Board With This Tile
-          </button>
-
-          <div className="note">
-            First hand rule: use <strong>6|6</strong>. For non-doubles like 6|2, use <strong>Flip Starter Tile</strong> if the board has it the other way.
-          </div>
-        </section>
-
-        <section className="panel">
-          <p className="step">Step 3</p>
-          <h2>Add each play live</h2>
-
-          <div className="turn-banner">
-            Current turn: <strong>{getPlayerLabel(currentTurn)}</strong>
-            <span>Next after this always moves right.</span>
-          </div>
-
-          <div className="form-grid add-play-grid">
-            <PlayerSelect value={playPlayer} onChange={setPlayPlayer} label="Who played?" />
-            <TileSelect value={playTile} onChange={setPlayTile} usedTiles={usedTiles} allowUsed={playPlayer === "me"} label="Tile played" />
-            <label className="field">
-              <span>Side</span>
-              <select value={playSide} onChange={(e) => setPlaySide(e.target.value)}>
-                <option value="left" disabled={!legalSidesForSelected.includes("left")}>
-                  Left side
-                </option>
-                <option value="right" disabled={!legalSidesForSelected.includes("right")}>
-                  Right side
-                </option>
-              </select>
-            </label>
-          </div>
-
-          <div className="button-row">
-            <button className="primary" type="button" onClick={addPlay}>
-              Add Play
-            </button>
-            <button className="ghost" type="button" onClick={addPass}>
-              Mark Pass
-            </button>
-            <button className="ghost danger" type="button" onClick={undoLast}>
-              Undo Last Tile
-            </button>
-          </div>
-        </section>
-      </section>
-
-      <section className="panel board-panel">
-        <div className="section-head">
-          <div>
-            <p className="step">Live board</p>
-            <h2>
-              Ends: {leftEnd === null ? "?" : leftEnd} / {rightEnd === null ? "?" : rightEnd}
-            </h2>
-          </div>
-        </div>
-        <BoardVisual board={board} leftEnd={leftEnd} rightEnd={rightEnd} />
-      </section>
-
-
-      <section className="panel team-brain-panel">
-        <div className="section-head">
-          <div>
-            <p className="step">Team Brain</p>
-            <h2>{teamRead.label}</h2>
-          </div>
-          <div className="team-strength">
-            Hand strength: <strong>{teamRead.myStrength.score}/100</strong>
-          </div>
-        </div>
-
-        <div className="team-grid">
-          <div>
-            <span>Me</span>
-            <strong>{teamRead.myTilesLeft}</strong>
-            <small>tiles left</small>
-          </div>
-          <div>
-            <span>Partner</span>
-            <strong>{teamRead.partnerTilesLeft}</strong>
-            <small>estimated tiles left</small>
-          </div>
-          <div>
-            <span>Right Opp</span>
-            <strong>{teamRead.rightOpponentTilesLeft}</strong>
-            <small>estimated tiles left</small>
-          </div>
-          <div>
-            <span>Left Opp</span>
-            <strong>{teamRead.leftOpponentTilesLeft}</strong>
-            <small>estimated tiles left</small>
-          </div>
-        </div>
-
-        <div className="team-reasons">
-          {(teamRead.reasons.length ? teamRead.reasons : ["no major team pressure yet"]).map((reason) => (
-            <span key={reason}>{reason}</span>
-          ))}
-          {teamRead.myStrength.reasons.map((reason) => (
-            <span key={reason}>{reason}</span>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel result-panel">
-        <p className="step">Advisor</p>
-        <h2>Best move for me</h2>
-
-        {currentTurn !== "me" && (
-          <div className="notice">
-            It is currently <strong>{getPlayerLabel(currentTurn)}</strong>'s turn.
-            Keep entering plays until it gets back to you.
-          </div>
-        )}
-
-        {!best ? (
-          <div className="empty">{advisor.message}</div>
-        ) : (
-          <>
-            <div className="best-card">
-              <div>
-                <p className="eyebrow">Best play</p>
-                <h3>
-                  {tileLabel(best.tile)} on the {best.side} side
-                </h3>
-                <p>
-                  New ends: <strong>{best.newEnds.leftEnd}</strong> / <strong>{best.newEnds.rightEnd}</strong>
-                </p>
-                <p>
-                  Capi chance after this move: <strong>{best.capiChance || 0}%</strong>
-                </p>
-                <p>
-                  Advisor mode: <strong>{best.teamIntentLabel || teamRead.label}</strong>
-                </p>
-                <p>
-                  Phase: <strong>{best.riskUpgrade?.phase}</strong> · Tiles out: <strong>{best.riskUpgrade?.tilesRemaining}</strong> · Flex after: <strong>{best.riskUpgrade?.afterFlex}/100</strong>
-                </p>
-              </div>
-              <div className={`score ${best.risk.toLowerCase()}`}>
-                {best.score}/100
-                <small>{best.risk} risk</small>
-              </div>
-            </div>
-
-            <button className="primary full-btn" type="button" onClick={() => playRecommendedMove(best)}>
-              Play Recommended Move For Me
-            </button>
-
-            <div className="small-results">
-              {backup && (
-                <div>
-                  <span>Backup</span>
-                  <strong>{tileLabel(backup.tile)} on {backup.side}</strong>
-                </div>
-              )}
-              {avoid && avoid.tile !== best.tile && (
-                <div>
-                  <span>Be careful</span>
-                  <strong>{tileLabel(avoid.tile)} on {avoid.side}</strong>
-                </div>
-              )}
-            </div>
-
-            <div className="explain-grid">
-              <div className="explain">
-                <h4>Why</h4>
-                <ul>
-                  {best.reasons.length ? best.reasons.map((r) => <li key={r}>{r}</li>) : <li>Best score from current board.</li>}
-                </ul>
-              </div>
-
-              <div className="explain warn">
-                <h4>Watch out</h4>
-                {best.warnings.length ? (
-                  <ul>
-                    {best.warnings.map((w) => <li key={w}>{w}</li>)}
-                  </ul>
-                ) : (
-                  <p>No major warning.</p>
-                )}
-              </div>
-            </div>
-
-            <details className="picker">
-              <summary>Show all legal moves</summary>
-              <div className="rankings">
-                {advisor.moves.map((move, index) => (
-                  <div className="rank-row" key={`${move.tile}-${move.side}`}>
-                    <strong>#{index + 1}</strong>
-                    <span>{tileLabel(move.tile)} on {move.side}</span>
-                    <span>Ends {move.newEnds.leftEnd}/{move.newEnds.rightEnd}</span>
-                    <em>{move.score}/100 · Capi {move.capiChance || 0}%</em>
-                  </div>
-                ))}
-              </div>
-            </details>
-          </>
-        )}
-      </section>
-
-
-
-      {best?.riskUpgrade && (
-        <section className="panel risk-engine-panel">
-          <p className="step">Risk Engine</p>
-          <h2>Double risk / flexibility read</h2>
-
-          <div className="risk-grid">
-            <div>
-              <span>Game phase</span>
-              <strong>{best.riskUpgrade.phase}</strong>
-            </div>
-            <div>
-              <span>Tiles still out</span>
-              <strong>{best.riskUpgrade.tilesRemaining}</strong>
-            </div>
-            <div>
-              <span>Future flexibility</span>
-              <strong>{best.riskUpgrade.afterFlex}/100</strong>
-            </div>
-            <div>
-              <span>Dead double penalty</span>
-              <strong>{best.riskUpgrade.doubleRisk.penalty}</strong>
-            </div>
-          </div>
-
-          {best.riskUpgrade.warnings.length > 0 && (
-            <div className="risk-warnings">
-              {best.riskUpgrade.warnings.map((warning) => (
-                <span key={warning}>{warning}</span>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
-      <section className="panel odds-panel">
-        <div className="section-head">
-          <div>
-            <p className="step">Strategy read</p>
-            <h2>Win chance / Capi / Closeout odds</h2>
-          </div>
-
-          <label className="field mode-field">
-            <span>Closeout rule</span>
-            <select value={closeoutMode} onChange={(e) => setCloseoutMode(e.target.value)}>
-              <option value="team">Team closeout: my team must have less than their team</option>
-              <option value="individual">Individual closeout: I must have less than player to my right</option>
-            </select>
-          </label>
-        </div>
-
-        <div className="odds-grid">
-          <div className="odds-card">
-            <span>Best move capi chance</span>
-            <strong>{best ? `${best.capiChance || 0}%` : "0%"}</strong>
-            <p>
-              {best && best.capiReasons?.length
-                ? best.capiReasons.join(" · ")
-                : "No capi setup found yet."}
-            </p>
-          </div>
-
-          <div className="odds-card">
-            <span>0|0 +100 finish chance</span>
-            <strong>{strategicRead.zeroZero.chance}%</strong>
-            <p>{strategicRead.zeroZero.reasons.join(" · ")}</p>
-          </div>
-
-          <div className="odds-card">
-            <span>Closeout win chance</span>
-            <strong>{strategicRead.closeout.chance}%</strong>
-            <p>{strategicRead.closeout.reasons.join(" · ")}</p>
-          </div>
-        </div>
-
-        <div className="read-grid">
-          {strategicRead.profiles.map((item) => (
-            <div key={item.id} className={`read-card ${item.team}`}>
-              <h3>{item.label}</h3>
-              <p>Chance they can answer current ends: <strong>{item.playChance}%</strong></p>
-              <p>
-                Strong numbers:{" "}
-                <strong>
-                  {item.profile.strongNumbers.length ? item.profile.strongNumbers.join(", ") : "none seen"}
-                </strong>
-              </p>
-              <p>
-                Passed/weak numbers:{" "}
-                <strong>
-                  {item.profile.weakNumbers.length ? item.profile.weakNumbers.join(", ") : "none"}
-                </strong>
-              </p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel">
-        <p className="step">Live summary</p>
-        <h2>What everyone played / passed on</h2>
-        <div className="summary-grid">
-          {PLAYERS_RIGHT_ORDER.map((player) => (
-            <PlayerSummary key={player.id} player={player} board={board} passLog={passLog} />
-          ))}
-        </div>
-      </section>
-    </main>
-  );
+.field-help {
+  display: block;
+  color: #aeb8ce;
+  font-size: 0.78rem;
+  font-weight: 750;
+  line-height: 1.35;
+  margin-top: -2px;
 }
