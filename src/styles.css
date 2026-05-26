@@ -560,3 +560,89 @@ select option:disabled {
     grid-column: 1;
   }
 }
+
+.mode-field {
+  min-width: min(440px, 100%);
+}
+
+.odds-panel {
+  border-color: rgba(255, 211, 106, 0.28);
+}
+
+.odds-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.odds-card {
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(1, 4, 14, 0.36);
+  border: 1px solid rgba(255, 211, 106, 0.18);
+}
+
+.odds-card span {
+  display: block;
+  color: #aeb8ce;
+  font-weight: 850;
+  margin-bottom: 8px;
+}
+
+.odds-card strong {
+  display: block;
+  color: #ffd36a;
+  font-size: 2.2rem;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.odds-card p {
+  margin: 0;
+  color: #e6e9f5;
+  line-height: 1.5;
+}
+
+.read-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.read-card {
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(1, 4, 14, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.read-card.us {
+  border-color: rgba(97, 242, 156, 0.24);
+}
+
+.read-card.them {
+  border-color: rgba(255, 123, 123, 0.24);
+}
+
+.read-card h3 {
+  margin: 0 0 10px;
+}
+
+.read-card p {
+  color: #cbd1e2;
+  line-height: 1.45;
+  margin: 8px 0;
+}
+
+.read-card strong {
+  color: #fff;
+}
+
+@media (max-width: 1050px) {
+  .odds-grid,
+  .read-grid {
+    grid-template-columns: 1fr;
+  }
+}
