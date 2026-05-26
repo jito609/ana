@@ -3,24 +3,26 @@ import "./styles.css";
 
 const NUMBERS = [0, 1, 2, 3, 4, 5, 6];
 
-const PLAYERS = [
-  { id: "me", label: "Me", team: "us" },
-  { id: "leftOpponent", label: "Left Opponent", team: "them" },
-  { id: "partner", label: "Partner", team: "us" },
-  { id: "rightOpponent", label: "Right Opponent", team: "them" },
+const SEATS = [
+  { id: "leftOpponent", label: "Left Opponent", type: "opponent" },
+  { id: "partner", label: "Partner", type: "partner" },
+  { id: "rightOpponent", label: "Right Opponent", type: "opponent" },
 ];
 
-const DEFAULT_HANDS = {
-  me: ["6-6", "6-4", "4-2", "3-3", "2-2", "5-2", "1-0"],
-  partner: ["6-5", "5-5", "4-4", "3-1", "2-0", "1-1", "0-0"],
-  leftOpponent: ["6-3", "6-1", "5-4", "5-0", "4-1", "3-2", "2-1"],
-  rightOpponent: ["6-2", "6-0", "5-3", "4-3", "4-0", "3-0", "2-2"],
+const DEFAULT_HAND = ["6-6", "6-4", "4-2", "3-3", "2-2", "5-2", "1-0"];
+
+const DEFAULT_CLUES = {
+  leftOpponent: { knownTiles: [], passed: [], strong: [], weak: [] },
+  partner: { knownTiles: [], passed: [], strong: [], weak: [] },
+  rightOpponent: { knownTiles: [], passed: [], strong: [], weak: [] },
 };
 
 function buildFullSet() {
   const tiles = [];
   for (let high = 0; high <= 6; high += 1) {
-    for (let low = 0; low <= high; low += 1) tiles.push(`${high}-${low}`);
+    for (let low = 0; low <= high; low += 1) {
+      tiles.push(`${high}-${low}`);
+    }
   }
   return tiles;
 }
@@ -43,6 +45,20 @@ function tilePips(tile) {
 function isDouble(tile) {
   const [a, b] = parseTile(tile);
   return a === b;
+}
+
+function normalizeTile(a, b) {
+  const x = Number(a);
+  const y = Number(b);
+  if (Number.isNaN(x) || Number.isNaN(y)) return "";
+  return x >= y ? `${x}-${y}` : `${y}-${x}`;
+}
+
+function countNumberInTiles(tiles, number) {
+  return tiles.reduce((total, tile) => {
+    const [a, b] = parseTile(tile);
+    return total + (a === number ? 1 : 0) + (b === number ? 1 : 0);
+  }, 0);
 }
 
 function legalSides(tile, leftEnd, rightEnd) {
@@ -68,44 +84,15 @@ function getNewEnds(move, leftEnd, rightEnd) {
   const [a, b] = parseTile(move.tile);
   const playedOn = move.side === "left" ? Number(leftEnd) : Number(rightEnd);
   const newNumber = a === playedOn ? b : a;
+
   if (move.side === "left") return { left: newNumber, right: Number(rightEnd) };
   return { left: Number(leftEnd), right: newNumber };
 }
 
-function countNumberInTiles(tiles, number) {
-  return tiles.reduce((total, tile) => {
-    const [a, b] = parseTile(tile);
-    return total + (a === number ? 1 : 0) + (b === number ? 1 : 0);
-  }, 0);
-}
-
-function getNextPlayerId(currentPlayerId) {
-  const index = PLAYERS.findIndex((p) => p.id === currentPlayerId);
-  return PLAYERS[(index + 1) % PLAYERS.length].id;
-}
-
-function getPlayerLabel(playerId) {
-  return PLAYERS.find((p) => p.id === playerId)?.label || playerId;
-}
-
-function getPlayerTeam(playerId) {
-  return PLAYERS.find((p) => p.id === playerId)?.team || "them";
-}
-
-function getOpponentIds(playerId) {
-  const myTeam = getPlayerTeam(playerId);
-  return PLAYERS.filter((p) => p.team !== myTeam).map((p) => p.id);
-}
-
-function getPartnerId(playerId) {
-  const myTeam = getPlayerTeam(playerId);
-  return PLAYERS.find((p) => p.team === myTeam && p.id !== playerId)?.id;
-}
-
-function remainingHandAfterMove(hand, tile) {
+function removeOneTile(hand, tileToRemove) {
   let removed = false;
-  return hand.filter((t) => {
-    if (!removed && t === tile) {
+  return hand.filter((tile) => {
+    if (!removed && tile === tileToRemove) {
       removed = true;
       return false;
     }
@@ -113,134 +100,146 @@ function remainingHandAfterMove(hand, tile) {
   });
 }
 
-function playerCanPlay(hand, leftEnd, rightEnd) {
-  return getLegalMoves(hand, leftEnd, rightEnd).length > 0;
+function getUnknownTiles(myHand, knownTiles, playedTiles) {
+  const known = new Set([...myHand, ...knownTiles, ...playedTiles]);
+  return FULL_SET.filter((tile) => !known.has(tile));
 }
 
-function bestReplyForPlayer(hand, leftEnd, rightEnd) {
-  const legal = getLegalMoves(hand, leftEnd, rightEnd);
-  if (!legal.length) return null;
-  return legal
-    .map((move) => ({ ...move, pips: tilePips(move.tile), newEnds: getNewEnds(move, leftEnd, rightEnd) }))
-    .sort((a, b) => b.pips - a.pips)[0];
+function playerClueScoreForNumber(clue, number, role) {
+  let score = 0;
+  const notes = [];
+
+  if (clue.passed.includes(number)) {
+    if (role === "opponent") {
+      score += 16;
+      notes.push(`opponent passed on ${number}`);
+    } else {
+      score -= 14;
+      notes.push(`partner passed on ${number}`);
+    }
+  }
+
+  if (clue.weak.includes(number)) {
+    if (role === "opponent") {
+      score += 10;
+      notes.push(`opponent looks weak in ${number}s`);
+    } else {
+      score -= 8;
+      notes.push(`partner looks weak in ${number}s`);
+    }
+  }
+
+  if (clue.strong.includes(number)) {
+    if (role === "opponent") {
+      score -= 12;
+      notes.push(`opponent may be strong in ${number}s`);
+    } else {
+      score += 10;
+      notes.push(`partner may be strong in ${number}s`);
+    }
+  }
+
+  const knownCount = countNumberInTiles(clue.knownTiles, number);
+  if (knownCount > 0) {
+    if (role === "opponent") {
+      score -= knownCount * 8;
+      notes.push(`opponent has known ${number} tile(s)`);
+    } else {
+      score += knownCount * 8;
+      notes.push(`partner has known ${number} tile(s)`);
+    }
+  }
+
+  return { score, notes };
 }
 
-function analyzeMove({ move, hands, currentPlayerId, leftEnd, rightEnd, gameMode, scoreUs, scoreThem }) {
-  const currentHand = hands[currentPlayerId] || [];
+function analyzeMove({
+  move,
+  myHand,
+  leftEnd,
+  rightEnd,
+  clues,
+  playedTiles,
+  gameMode,
+  scoreUs,
+  scoreThem,
+}) {
+  const remainingHand = removeOneTile(myHand, move.tile);
   const newEnds = getNewEnds(move, leftEnd, rightEnd);
   const exposed = [newEnds.left, newEnds.right];
-  const nextPlayerId = getNextPlayerId(currentPlayerId);
-  const partnerId = getPartnerId(currentPlayerId);
-  const opponentIds = getOpponentIds(currentPlayerId);
-
-  const remainingCurrentHand = remainingHandAfterMove(currentHand, move.tile);
-  const nextPlayerHand = hands[nextPlayerId] || [];
-  const partnerHand = hands[partnerId] || [];
-  const opponentHands = opponentIds.flatMap((id) => hands[id] || []);
+  const knownClueTiles = Object.values(clues).flatMap((clue) => clue.knownTiles);
+  const unknownTiles = getUnknownTiles(myHand, knownClueTiles, playedTiles);
 
   let score = 50;
   const reasons = [];
   const warnings = [];
-  const threats = [];
+  const tags = [];
 
   const playedPips = tilePips(move.tile);
-  const remainingPips = remainingCurrentHand.reduce((sum, tile) => sum + tilePips(tile), 0);
-  const followUps = exposed.reduce((sum, n) => sum + countNumberInTiles(remainingCurrentHand, n), 0);
+  const remainingPips = remainingHand.reduce((sum, tile) => sum + tilePips(tile), 0);
+  const followUps = exposed.reduce((sum, n) => sum + countNumberInTiles(remainingHand, n), 0);
 
   score += Math.min(20, playedPips * 1.5);
-  if (playedPips >= 9) reasons.push("drops high pips so you are safer if the hand blocks");
+  if (playedPips >= 9) {
+    reasons.push("drops high pips so you are safer if the hand blocks");
+    tags.push("Pip dump");
+  }
 
   if (isDouble(move.tile)) {
     score += 5;
     reasons.push("gets a double out while it is playable");
+    tags.push("Double");
   }
 
-  if (remainingCurrentHand.length === 0) {
+  if (remainingHand.length === 0) {
     score += 100;
-    reasons.push("this wins the hand immediately");
+    reasons.push("this gets you out immediately");
+    tags.push("Win now");
   }
 
   if (followUps >= 2) {
     score += 16;
-    reasons.push("keeps you with multiple follow-up plays on the new board ends");
+    reasons.push("keeps you with multiple follow-up plays on the new ends");
+    tags.push("Follow-up");
   } else if (followUps === 1) {
     score += 6;
     reasons.push("keeps at least one follow-up path");
   } else {
     score -= 14;
     warnings.push("you may be stuck if the board comes back the same way");
+    tags.push("Risky");
   }
 
   exposed.forEach((number) => {
-    const myCount = countNumberInTiles(remainingCurrentHand, number);
-    const partnerCount = countNumberInTiles(partnerHand, number);
-    const opponentCount = countNumberInTiles(opponentHands, number);
-    const nextCount = countNumberInTiles(nextPlayerHand, number);
+    const myCount = countNumberInTiles(remainingHand, number);
+    const unknownCount = countNumberInTiles(unknownTiles, number);
 
     if (myCount >= 2) {
-      score += 12;
-      reasons.push(`keeps control of ${number}s in your own hand`);
+      score += 13;
+      reasons.push(`keeps control of ${number}s in your hand`);
+      tags.push(`${number} control`);
     }
 
-    if (partnerCount >= 2) {
-      score += 10;
-      reasons.push(`helps your partner because they are strong in ${number}s`);
+    if (myCount === 0 && unknownCount >= 5) {
+      score -= 8;
+      warnings.push(`opens ${number}s even though you do not control them`);
     }
 
-    if (partnerCount === 0 && partnerId) {
-      score -= 6;
-      warnings.push(`does not help your partner on ${number}s`);
+    if (unknownCount <= 2) {
+      score += 8;
+      reasons.push(`${number}s look tight because few unknown ${number} tiles remain`);
+      tags.push("Tight board");
     }
 
-    if (opponentCount === 0) {
-      score += 18;
-      reasons.push(`opponents have no ${number}s, so this can choke their team`);
-    } else if (opponentCount >= 4) {
-      score -= 12;
-      warnings.push(`opponents are strong in ${number}s, so this may feed them`);
-    }
-
-    if (nextCount === 0) {
-      score += 16;
-      reasons.push(`${getPlayerLabel(nextPlayerId)} cannot answer ${number}`);
-    } else if (nextCount >= 2) {
-      score -= 14;
-      warnings.push(`${getPlayerLabel(nextPlayerId)} has multiple ${number}s and may punish this`);
-    }
+    SEATS.forEach((seat) => {
+      const result = playerClueScoreForNumber(clues[seat.id], number, seat.type);
+      score += result.score;
+      result.notes.forEach((note) => {
+        if (result.score >= 0) reasons.push(note);
+        else warnings.push(note);
+      });
+    });
   });
-
-  const nextCanPlay = playerCanPlay(nextPlayerHand, newEnds.left, newEnds.right);
-  if (!nextCanPlay) {
-    score += 22;
-    reasons.push(`this forces ${getPlayerLabel(nextPlayerId)} to pass`);
-  } else {
-    const reply = bestReplyForPlayer(nextPlayerHand, newEnds.left, newEnds.right);
-    if (reply) {
-      threats.push(`${getPlayerLabel(nextPlayerId)} can answer with ${tileLabel(reply.tile)} on ${reply.side}`);
-      if (tilePips(reply.tile) >= 9) {
-        score -= 10;
-        warnings.push(`next player has a heavy reply available: ${tileLabel(reply.tile)}`);
-      }
-    }
-  }
-
-  const opponentCanGoOutSoon = opponentIds.some((id) => (hands[id] || []).length <= 2);
-  const partnerCanGoOutSoon = partnerId && (hands[partnerId] || []).length <= 2;
-
-  if (opponentCanGoOutSoon && !nextCanPlay) {
-    score += 8;
-    reasons.push("blocks pressure while an opponent is close to going out");
-  }
-
-  if (partnerCanGoOutSoon) {
-    score += 8;
-    reasons.push("your partner is close to going out, so helping their numbers matters");
-  }
-
-  if (remainingCurrentHand.length <= 2) {
-    score += followUps * 8;
-    if (remainingPips <= 6) reasons.push("leaves you very light for the endgame");
-  }
 
   const target = gameMode === "pr500" ? 500 : 200;
   const usNeed = target - Number(scoreUs || 0);
@@ -251,12 +250,24 @@ function analyzeMove({ move, hands, currentPlayerId, leftEnd, rightEnd, gameMode
     reasons.push("opponents are close to winning, so dumping pips matters");
   }
 
+  if (usNeed <= 50 && followUps > 0) {
+    score += 8;
+    reasons.push("your team is close to winning, so staying playable matters");
+  }
+
   if (gameMode === "pr500" && newEnds.left === newEnds.right) {
     score += 7;
     reasons.push("creates matching ends, which can set up capi pressure");
+    tags.push("Capi setup");
+  }
+
+  if (remainingHand.length <= 2) {
+    score += followUps * 8;
+    if (remainingPips <= 6) reasons.push("leaves you light for the endgame");
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
+
   let risk = "Medium";
   if (score >= 78) risk = "Low";
   if (score < 55) risk = "High";
@@ -266,75 +277,45 @@ function analyzeMove({ move, hands, currentPlayerId, leftEnd, rightEnd, gameMode
     newEnds,
     score,
     risk,
+    tags: [...new Set(tags)].slice(0, 5),
     reasons: [...new Set(reasons)].slice(0, 6),
     warnings: [...new Set(warnings)].slice(0, 5),
-    threats: [...new Set(threats)].slice(0, 3),
-    remainingPips,
-    nextCanPlay,
   };
 }
 
 function analyzePosition(input) {
-  const hand = input.hands[input.currentPlayerId] || [];
-  const legalMoves = getLegalMoves(hand, input.leftEnd, input.rightEnd);
+  const legalMoves = getLegalMoves(input.myHand, input.leftEnd, input.rightEnd);
 
   if (!legalMoves.length) {
-    return { best: null, moves: [], message: `${getPlayerLabel(input.currentPlayerId)} has no legal move and must pass.` };
+    return {
+      best: null,
+      backup: null,
+      avoid: null,
+      moves: [],
+      message: "No legal move. You should pass from this position.",
+    };
   }
 
-  const moves = legalMoves.map((move) => analyzeMove({ ...input, move })).sort((a, b) => b.score - a.score);
-  return { best: moves[0], worst: moves[moves.length - 1], moves, message: "" };
+  const moves = legalMoves
+    .map((move) => analyzeMove({ ...input, move }))
+    .sort((a, b) => b.score - a.score);
+
+  return {
+    best: moves[0],
+    backup: moves[1] || null,
+    avoid: moves[moves.length - 1] || null,
+    moves,
+    message: "",
+  };
 }
 
-function TileButton({ tile, onClick, disabled = false, small = false }) {
+function Tile({ tile, onClick, disabled = false }) {
   return (
-    <button type="button" className={`tile ${small ? "small" : ""}`} disabled={disabled} onClick={onClick} title={tileLabel(tile)}>
+    <button className="tile" type="button" onClick={onClick} disabled={disabled}>
       <span>{parseTile(tile)[0]}</span>
       <i />
       <span>{parseTile(tile)[1]}</span>
     </button>
-  );
-}
-
-function HandPanel({ player, tiles, setHands, usedTiles }) {
-  function removeTile(tile) {
-    setHands((current) => ({ ...current, [player.id]: current[player.id].filter((t) => t !== tile) }));
-  }
-
-  function addTile(tile) {
-    if (usedTiles.has(tile)) return;
-    setHands((current) => ({ ...current, [player.id]: [...current[player.id], tile] }));
-  }
-
-  function clearHand() {
-    setHands((current) => ({ ...current, [player.id]: [] }));
-  }
-
-  return (
-    <div className={`hand-panel ${player.team}`}>
-      <div className="hand-head">
-        <div>
-          <h3>{player.label}</h3>
-          <p>{player.team === "us" ? "Your team" : "Opponent team"} · {tiles.length} tiles</p>
-        </div>
-        <button type="button" className="mini danger" onClick={clearHand}>Clear</button>
-      </div>
-
-      <div className="hand-tiles">
-        {tiles.length ? tiles.map((tile, index) => (
-          <TileButton key={`${tile}-${index}`} tile={tile} onClick={() => removeTile(tile)} small />
-        )) : <div className="empty-hand">No tiles added</div>}
-      </div>
-
-      <details className="tile-picker">
-        <summary>Add tile</summary>
-        <div className="full-set">
-          {FULL_SET.map((tile) => (
-            <TileButton key={tile} tile={tile} small disabled={usedTiles.has(tile)} onClick={() => addTile(tile)} />
-          ))}
-        </div>
-      </details>
-    </div>
   );
 }
 
@@ -343,103 +324,353 @@ function NumberSelect({ label, value, onChange }) {
     <label className="field">
       <span>{label}</span>
       <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Choose</option>
-        {NUMBERS.map((n) => <option key={n} value={n}>{n}</option>)}
+        <option value="">?</option>
+        {NUMBERS.map((n) => (
+          <option key={n} value={n}>{n}</option>
+        ))}
       </select>
     </label>
   );
 }
 
+function NumberToggles({ values, onChange }) {
+  function toggle(num) {
+    onChange(values.includes(num) ? values.filter((x) => x !== num) : [...values, num]);
+  }
+
+  return (
+    <div className="num-row">
+      {NUMBERS.map((num) => (
+        <button
+          key={num}
+          type="button"
+          className={values.includes(num) ? "num active" : "num"}
+          onClick={() => toggle(num)}
+        >
+          {num}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TilePicker({ usedTiles, onPick }) {
+  return (
+    <div className="tile-grid">
+      {FULL_SET.map((tile) => (
+        <Tile key={tile} tile={tile} disabled={usedTiles.has(tile)} onClick={() => onPick(tile)} />
+      ))}
+    </div>
+  );
+}
+
+function MyHandPanel({ myHand, setMyHand, usedTiles }) {
+  function addTile(tile) {
+    if (usedTiles.has(tile)) return;
+    setMyHand((current) => [...current, tile]);
+  }
+
+  function removeTile(index) {
+    setMyHand((current) => current.filter((_, i) => i !== index));
+  }
+
+  return (
+    <section className="panel focus-panel">
+      <div className="section-head">
+        <div>
+          <p className="step">Step 1</p>
+          <h2>Your hand</h2>
+        </div>
+        <button className="mini danger" type="button" onClick={() => setMyHand([])}>Clear</button>
+      </div>
+
+      <div className="hand-zone">
+        {myHand.length ? (
+          myHand.map((tile, index) => (
+            <Tile key={`${tile}-${index}`} tile={tile} onClick={() => removeTile(index)} />
+          ))
+        ) : (
+          <div className="empty">Tap tiles below to add your hand.</div>
+        )}
+      </div>
+
+      <details className="picker">
+        <summary>Add tiles to my hand</summary>
+        <TilePicker usedTiles={usedTiles} onPick={addTile} />
+      </details>
+    </section>
+  );
+}
+
+function ClueCard({ seat, clue, updateClue, usedTiles }) {
+  function setPart(part, value) {
+    updateClue(seat.id, { ...clue, [part]: value });
+  }
+
+  function addKnownTile(tile) {
+    if (usedTiles.has(tile)) return;
+    setPart("knownTiles", [...clue.knownTiles, tile]);
+  }
+
+  function removeKnownTile(index) {
+    setPart("knownTiles", clue.knownTiles.filter((_, i) => i !== index));
+  }
+
+  return (
+    <section className="clue-card">
+      <div className="clue-title">
+        <h3>{seat.label}</h3>
+        <p>{seat.type === "partner" ? "Help your partner if possible" : "Try not to feed them"}</p>
+      </div>
+
+      <div className="clue-block">
+        <label>Known tiles you saw</label>
+        <div className="mini-hand">
+          {clue.knownTiles.length ? (
+            clue.knownTiles.map((tile, index) => (
+              <Tile key={`${tile}-${index}`} tile={tile} onClick={() => removeKnownTile(index)} />
+            ))
+          ) : (
+            <span>No exact tiles known</span>
+          )}
+        </div>
+        <details className="picker compact">
+          <summary>Add known tile</summary>
+          <TilePicker usedTiles={usedTiles} onPick={addKnownTile} />
+        </details>
+      </div>
+
+      <div className="clue-block">
+        <label>They passed on</label>
+        <NumberToggles values={clue.passed} onChange={(value) => setPart("passed", value)} />
+      </div>
+
+      <div className="clue-block">
+        <label>They seem strong in</label>
+        <NumberToggles values={clue.strong} onChange={(value) => setPart("strong", value)} />
+      </div>
+
+      <div className="clue-block">
+        <label>They seem weak in</label>
+        <NumberToggles values={clue.weak} onChange={(value) => setPart("weak", value)} />
+      </div>
+    </section>
+  );
+}
+
+function MoveSummary({ title, move }) {
+  if (!move) return null;
+
+  return (
+    <div className="move-summary">
+      <p>{title}</p>
+      <strong>{tileLabel(move.tile)} on {move.side}</strong>
+      <span>ends {move.newEnds.left}/{move.newEnds.right} · {move.score}/100</span>
+    </div>
+  );
+}
+
 export default function App() {
-  const [hands, setHands] = useState(DEFAULT_HANDS);
-  const [currentPlayerId, setCurrentPlayerId] = useState("me");
+  const [myHand, setMyHand] = useState(DEFAULT_HAND);
   const [leftEnd, setLeftEnd] = useState("6");
   const [rightEnd, setRightEnd] = useState("2");
+  const [playedText, setPlayedText] = useState("6-2");
   const [gameMode, setGameMode] = useState("pr500");
   const [scoreUs, setScoreUs] = useState(0);
   const [scoreThem, setScoreThem] = useState(0);
+  const [clues, setClues] = useState(DEFAULT_CLUES);
 
-  const usedTiles = useMemo(() => new Set(Object.values(hands).flat()), [hands]);
-
-  const analysis = useMemo(
-    () => analyzePosition({ hands, currentPlayerId, leftEnd, rightEnd, gameMode, scoreUs, scoreThem }),
-    [hands, currentPlayerId, leftEnd, rightEnd, gameMode, scoreUs, scoreThem]
+  const playedTiles = useMemo(
+    () =>
+      playedText
+        .split(/[,\s]+/)
+        .map((x) => x.trim().replace("|", "-"))
+        .filter(Boolean)
+        .map((tile) => {
+          const [a, b] = tile.split("-").map(Number);
+          return normalizeTile(a, b);
+        })
+        .filter(Boolean),
+    [playedText]
   );
 
+  const usedTiles = useMemo(() => {
+    const known = Object.values(clues).flatMap((clue) => clue.knownTiles);
+    return new Set([...myHand, ...known, ...playedTiles]);
+  }, [myHand, clues, playedTiles]);
+
+  const analysis = useMemo(
+    () =>
+      analyzePosition({
+        myHand,
+        leftEnd,
+        rightEnd,
+        clues,
+        playedTiles,
+        gameMode,
+        scoreUs,
+        scoreThem,
+      }),
+    [myHand, leftEnd, rightEnd, clues, playedTiles, gameMode, scoreUs, scoreThem]
+  );
+
+  function updateClue(seatId, newValue) {
+    setClues((current) => ({
+      ...current,
+      [seatId]: newValue,
+    }));
+  }
+
   function resetDemo() {
-    setHands(DEFAULT_HANDS);
-    setCurrentPlayerId("me");
+    setMyHand(DEFAULT_HAND);
     setLeftEnd("6");
     setRightEnd("2");
+    setPlayedText("6-2");
     setGameMode("pr500");
     setScoreUs(0);
     setScoreThem(0);
-  }
-
-  function clearAll() {
-    setHands({ me: [], partner: [], leftOpponent: [], rightOpponent: [] });
+    setClues(DEFAULT_CLUES);
   }
 
   return (
     <main className="app">
       <section className="hero">
         <div>
-          <p className="eyebrow">Domino Full Table Analyzer</p>
-          <h1>Enter all four hands. Get the best next play.</h1>
-          <p>This version does not guess. You manually input every player’s tiles, choose whose turn it is, set the board ends, and the app ranks the best legal play.</p>
+          <p className="eyebrow">Real-Life Domino Advisor</p>
+          <h1>Enter your hand. Add clues. Get the best move.</h1>
+          <p>
+            You do not need to know everyone’s full hand. Add what you know: exact tiles you saw,
+            passes, strong numbers, weak numbers, and partner clues.
+          </p>
         </div>
-        <div className="hero-actions">
-          <button type="button" className="ghost" onClick={resetDemo}>Reset demo</button>
-          <button type="button" className="ghost danger" onClick={clearAll}>Clear all hands</button>
+        <button type="button" className="ghost" onClick={resetDemo}>Reset demo</button>
+      </section>
+
+      <section className="quick-grid">
+        <div className="panel">
+          <p className="step">Step 2</p>
+          <h2>Board</h2>
+          <div className="board-controls">
+            <NumberSelect label="Left end" value={leftEnd} onChange={setLeftEnd} />
+            <NumberSelect label="Right end" value={rightEnd} onChange={setRightEnd} />
+          </div>
+
+          <div className="board-preview">
+            <div><small>Left</small><strong>{leftEnd || "?"}</strong></div>
+            <span>open ends</span>
+            <div><small>Right</small><strong>{rightEnd || "?"}</strong></div>
+          </div>
+        </div>
+
+        <div className="panel">
+          <p className="step">Optional</p>
+          <h2>Score / played tiles</h2>
+          <div className="score-grid">
+            <label className="field">
+              <span>Mode</span>
+              <select value={gameMode} onChange={(e) => setGameMode(e.target.value)}>
+                <option value="pr500">Puerto Rican 500</option>
+                <option value="classic200">Classic 200</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Us</span>
+              <input type="number" value={scoreUs} onChange={(e) => setScoreUs(e.target.value)} />
+            </label>
+            <label className="field">
+              <span>Them</span>
+              <input type="number" value={scoreThem} onChange={(e) => setScoreThem(e.target.value)} />
+            </label>
+          </div>
+          <label className="field played">
+            <span>Known played tiles</span>
+            <input value={playedText} onChange={(e) => setPlayedText(e.target.value)} placeholder="6-2 2-4 4-0" />
+          </label>
         </div>
       </section>
 
-      <section className="setup panel">
-        <h2>Board and turn</h2>
-        <div className="setup-grid">
-          <NumberSelect label="Left board end" value={leftEnd} onChange={setLeftEnd} />
-          <NumberSelect label="Right board end" value={rightEnd} onChange={setRightEnd} />
-          <label className="field"><span>Whose turn?</span><select value={currentPlayerId} onChange={(e) => setCurrentPlayerId(e.target.value)}>{PLAYERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
-          <label className="field"><span>Game mode</span><select value={gameMode} onChange={(e) => setGameMode(e.target.value)}><option value="pr500">Puerto Rican 500</option><option value="classic200">Classic 200</option></select></label>
-          <label className="field"><span>Your team score</span><input type="number" value={scoreUs} onChange={(e) => setScoreUs(e.target.value)} /></label>
-          <label className="field"><span>Opponent score</span><input type="number" value={scoreThem} onChange={(e) => setScoreThem(e.target.value)} /></label>
-        </div>
+      <MyHandPanel myHand={myHand} setMyHand={setMyHand} usedTiles={usedTiles} />
 
-        <div className="board">
-          <div className="end-card"><small>Left</small><strong>{leftEnd || "?"}</strong></div>
-          <div className="table-line"><span>{getPlayerLabel(currentPlayerId)} to play</span></div>
-          <div className="end-card"><small>Right</small><strong>{rightEnd || "?"}</strong></div>
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <p className="step">Step 3 optional</p>
+            <h2>Clues about other players</h2>
+          </div>
+        </div>
+        <div className="clue-grid">
+          {SEATS.map((seat) => (
+            <ClueCard
+              key={seat.id}
+              seat={seat}
+              clue={clues[seat.id]}
+              updateClue={updateClue}
+              usedTiles={usedTiles}
+            />
+          ))}
         </div>
       </section>
 
-      <section className="hands-grid">
-        {PLAYERS.map((player) => <HandPanel key={player.id} player={player} tiles={hands[player.id]} setHands={setHands} usedTiles={usedTiles} />)}
-      </section>
+      <section className="panel result-panel">
+        <p className="step">Step 4</p>
+        <h2>Best move</h2>
 
-      <section className="results panel">
-        <h2>Best next play</h2>
-        {!analysis.best ? <div className="empty-result">{analysis.message}</div> : (
+        {!analysis.best ? (
+          <div className="empty result-empty">{analysis.message}</div>
+        ) : (
           <>
-            <div className="best-card">
+            <div className="best">
               <div>
-                <p className="eyebrow">Recommended move</p>
-                <h3>{getPlayerLabel(currentPlayerId)} should play <span>{tileLabel(analysis.best.tile)}</span> on the {analysis.best.side} side</h3>
-                <p>New board ends: <strong>{analysis.best.newEnds.left}</strong> and <strong>{analysis.best.newEnds.right}</strong></p>
+                <p className="eyebrow">Recommended</p>
+                <h3>Play {tileLabel(analysis.best.tile)} on the {analysis.best.side} side</h3>
+                <p>New ends: <strong>{analysis.best.newEnds.left}</strong> / <strong>{analysis.best.newEnds.right}</strong></p>
+                <div className="tags">
+                  {analysis.best.tags.map((tag) => <span key={tag}>{tag}</span>)}
+                </div>
               </div>
-              <div className={`risk ${analysis.best.risk.toLowerCase()}`}>{analysis.best.score}/100 · {analysis.best.risk} risk</div>
+              <div className={`score-badge ${analysis.best.risk.toLowerCase()}`}>
+                {analysis.best.score}/100<br />
+                <small>{analysis.best.risk} risk</small>
+              </div>
+            </div>
+
+            <div className="summary-row">
+              <MoveSummary title="Backup" move={analysis.backup} />
+              <MoveSummary title="Be careful" move={analysis.avoid} />
             </div>
 
             <div className="explain-grid">
-              <div className="explain"><h4>Why this is best</h4><ul>{analysis.best.reasons.length ? analysis.best.reasons.map((reason) => <li key={reason}>{reason}</li>) : <li>It is the strongest legal move from the exact tiles entered.</li>}</ul></div>
-              <div className="explain warning-box"><h4>Warnings / possible punishment</h4>{analysis.best.warnings.length || analysis.best.threats.length ? <ul>{[...analysis.best.warnings, ...analysis.best.threats].map((warning) => <li key={warning}>{warning}</li>)}</ul> : <p>No major punishment found from the next player.</p>}</div>
+              <div className="explain">
+                <h4>Why</h4>
+                <ul>
+                  {analysis.best.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                </ul>
+              </div>
+              <div className="explain warn">
+                <h4>Watch out</h4>
+                {analysis.best.warnings.length ? (
+                  <ul>
+                    {analysis.best.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                  </ul>
+                ) : (
+                  <p>No big warning found.</p>
+                )}
+              </div>
             </div>
 
-            <h3 className="rank-title">All legal moves ranked</h3>
-            <div className="rankings">
-              {analysis.moves.map((move, index) => <div className="rank-row" key={`${move.tile}-${move.side}`}><strong>#{index + 1}</strong><span>{tileLabel(move.tile)} on {move.side}</span><span>Ends {move.newEnds.left}/{move.newEnds.right}</span><span>{move.score}/100</span><em className={`risk-text ${move.risk.toLowerCase()}`}>{move.risk}</em></div>)}
-            </div>
-
-            {analysis.worst && analysis.worst.tile !== analysis.best.tile && <div className="avoid"><h4>Move to be careful with</h4><p><strong>{tileLabel(analysis.worst.tile)} on {analysis.worst.side}</strong> ranked lowest because it creates more risk from the exact table position.</p></div>}
+            <details className="all-moves">
+              <summary>Show all legal moves ranked</summary>
+              <div className="rankings">
+                {analysis.moves.map((move, index) => (
+                  <div className="rank-row" key={`${move.tile}-${move.side}`}>
+                    <strong>#{index + 1}</strong>
+                    <span>{tileLabel(move.tile)} on {move.side}</span>
+                    <span>Ends {move.newEnds.left}/{move.newEnds.right}</span>
+                    <em>{move.score}/100</em>
+                  </div>
+                ))}
+              </div>
+            </details>
           </>
         )}
       </section>
